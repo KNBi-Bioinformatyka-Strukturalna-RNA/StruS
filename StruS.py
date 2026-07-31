@@ -48,8 +48,6 @@ Usage:
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
     parser.add_argument("-m", "--mbr", default="mbr_matrix.json", help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
-    #parser.add_argument("--target", required=True, type=Path)
-    #parser.add_argument("--predictions", required=True, type=Path)
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
