@@ -19,8 +19,8 @@ A step by step series of examples that tell you how to get a development env run
 Clone the repo and create virtual environment.
 
 ```bash
-git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git na-model-error-detector
-cd na-model-error-detector/StruS
+git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git rna-model-error-detector
+cd rna-model-error-detector/StruS
 python -m venv .venv
 source .venv/bin/activate
 (.venv) pip install -r requirements.txt
@@ -31,8 +31,8 @@ source .venv/bin/activate
 Clone the repo and create virtual environment.
 
 ```pwsh
-git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git na-model-error-detector
-cd na-model-error-detector/StruS
+git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git rna-model-error-detector
+cd rna-model-error-detector/StruS
 python -m venv .venv
 .venv\Scripts\activate
 (.venv) pip install -r requirements.txt
