@@ -4,7 +4,7 @@ import argparse
 import subprocess
 from pathlib import Path
 
-ANNOTATOR = "rnapolis-py/src/rnapolis/annotator.py"
+ANNOTATOR = "../../rnapolis-py/src/rnapolis/annotator.py"
 CONVERTER = "annotation_converter.py"
 RTBS = "RTBS.py"
 
@@ -46,7 +46,7 @@ Usage:
     parser.add_argument("prediction", nargs="?", default=None, help="Single prediction (.pdb). Do not use together with -p.")
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
-
+    parser.add_argument("-m", "--mbr", default="mbr_matrix.json", help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
     return parser.parse_args()
 
 
@@ -89,19 +89,19 @@ def convert_annotation(json_file, output_dir):
     return out_name
 
 
-def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir):
+def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr):
     output_dir.mkdir(parents=True, exist_ok=True)
     if pred_dir is None:
         pred_json = prediction_jsons[0]
         out_file = output_dir / pred_json.stem
-        cmd = ["python3", RTBS, str(target_json), str(pred_json), "-o", str(out_file)]
+        cmd = ["python3", RTBS, str(target_json), str(pred_json), "-o", str(out_file), "-m", str(mbr)]
         run_command(cmd, quiet=False)
     else:
-        cmd = ["python3", RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir)]
+        cmd = ["python3", RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
         run_command(cmd, quiet=False)
 
 
-def execute_rtbs(target, predictions, pred_dir, workdir):
+def execute_rtbs(target, predictions, pred_dir, workdir, mbr):
     print("\n=====RTBS=====")
     annotator_dir = workdir / "annotated"
     converted_dir = workdir / "converted"
@@ -118,9 +118,9 @@ def execute_rtbs(target, predictions, pred_dir, workdir):
         pred_json = annotate_pdb(pred, annotator_dir)
         converted = convert_annotation(pred_json, converted_dir)
         prediction_jsons.append(converted)
-
+    
     print("\nCalculating RTBS:")
-    run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir)
+    run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir, mbr)
     print("RTBS calculated")
 
 def execute_struct_rmsd(target, prediction_jsons, pred_dir, workdir):
@@ -134,6 +134,9 @@ def main():
     workdir = Path(args.out_dir)
     workdir.mkdir(parents=True, exist_ok=True)
     target = check_pdb(args.target)
+    mbr_path = Path(args.mbr)
+    if not mbr_path.is_file():
+        raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
     pred_dir = None 
 
     if args.pred_dir:
@@ -152,11 +155,11 @@ def main():
         raise RuntimeError("Provide prediction.pdb or -p prediction_folder")
 
     if args.tool is None:
-        execute_rtbs(target, predictions, pred_dir, workdir)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
         execute_struct_rmsd(target, predictions, pred_dir, workdir)
 
     elif args.tool == "RTBS":
-        execute_rtbs(target, predictions, pred_dir, workdir)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
 
     elif args.tool == "structRMSD":
         execute_struct_rmsd(target, predictions, pred_dir, workdir)

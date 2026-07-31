@@ -61,7 +61,7 @@ import numpy as np
 
 #arguments
 parser = argparse.ArgumentParser(
-    description="Visualise RNA prediction tree(s) with real MBR penalty scores"
+    description="RNA Tree BEAR Similarity with RNA Tree Penalty Visualizer"
 )
 parser.add_argument("target",
     help="Target structure JSON")
@@ -70,7 +70,7 @@ parser.add_argument("prediction", nargs="?", default=None,
 parser.add_argument("-p", "--pred_dir", default=None,
     help="Folder of predicted structure JSONs (alternative to single prediction)")
 parser.add_argument("-m", "--mbr", default=None,
-    help="Path to MBR CSV matrix (default: mbr_matrix.json next to this script)")
+    help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
 parser.add_argument("-o", "--output", default=None,
     help="Output path: image file for single prediction, folder for -p mode")
 parser.add_argument("--show", action="store_true",
@@ -149,17 +149,17 @@ def load_mbr_from_json(json_path: str) -> dict:
 
 script_dir = pathlib.Path(__file__).parent
 mbr_json   = script_dir / "mbr_matrix.json"
-mbr_csv    = args.mbr
+mbr_different = args.mbr
 
-if mbr_csv and pathlib.Path(mbr_csv).exists():
-    MBR = load_mbr_from_csv(mbr_csv)
-    print(f"Loaded MBR from CSV: {mbr_csv}")
+if mbr_different and pathlib.Path(mbr_different).exists():
+    MBR = load_mbr_from_json(mbr_different)
+    print(f"Loaded MBR from JSON: {mbr_different}")
 elif mbr_json.exists():
     MBR = load_mbr_from_json(str(mbr_json))
     print(f"Loaded MBR from JSON cache: {mbr_json}")
 else:
     raise FileNotFoundError(
-        "MBR matrix not found. Provide --mbr path/to/matrix.csv "
+        "MBR matrix not found. Provide --mbr path/to/matrix.json "
         "or place mbr_matrix.json next to this script."
     )
 
