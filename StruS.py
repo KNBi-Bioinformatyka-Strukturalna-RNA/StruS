@@ -3,6 +3,7 @@
 import argparse
 import subprocess
 from pathlib import Path
+from structRMSD import struct_rmsd_main
 
 ANNOTATOR = "../../rnapolis-py/src/rnapolis/annotator.py"
 CONVERTER = "annotation_converter.py"
@@ -47,6 +48,15 @@ Usage:
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
     parser.add_argument("-m", "--mbr", default="mbr_matrix.json", help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
+    #parser.add_argument("--target", required=True, type=Path)
+    #parser.add_argument("--predictions", required=True, type=Path)
+    parser.add_argument("--motif-tree", type=Path, default=None)
+    parser.add_argument("--dbn", type=Path, default=None)
+    parser.add_argument("--bpseq", type=Path, default=None)
+    parser.add_argument("--tm-threshold", type=float, default=0.45)
+    parser.add_argument("--usalign-bin", type=str, default=None)
+    parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
+    parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
     return parser.parse_args()
 
 
@@ -100,6 +110,10 @@ def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr):
         cmd = ["python3", RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
         run_command(cmd, quiet=False)
 
+def run_structRMSD(args, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    struct_rmsd_main(output_dir, args)
+
 
 def execute_rtbs(target, predictions, pred_dir, workdir, mbr):
     print("\n=====RTBS=====")
@@ -123,9 +137,11 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr):
     run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir, mbr)
     print("RTBS calculated")
 
-def execute_struct_rmsd(target, prediction_jsons, pred_dir, workdir):
+
+def execute_struct_rmsd(args, workdir):
     print("\n=====structRMSD=====")
     rtbs_dir = workdir / "structRMSD_results"
+    run_structRMSD(args, rtbs_dir)
 
 
 
@@ -156,13 +172,13 @@ def main():
 
     if args.tool is None:
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
-        execute_struct_rmsd(target, predictions, pred_dir, workdir)
+        execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
 
     elif args.tool == "structRMSD":
-        execute_struct_rmsd(target, predictions, pred_dir, workdir)
+        execute_struct_rmsd(args, workdir)
 
 
 if __name__ == "__main__":
