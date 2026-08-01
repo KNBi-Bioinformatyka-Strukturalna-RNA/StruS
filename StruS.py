@@ -3,6 +3,7 @@
 import argparse
 import subprocess
 from pathlib import Path
+from structRMSD import struct_rmsd_main
 
 ANNOTATOR = "../../rnapolis-py/src/rnapolis/annotator.py"
 CONVERTER = "annotation_converter.py"
@@ -26,7 +27,16 @@ RNA Tree BEAR Similarity (RTBS) with RNA Tree Penalty Visualizer:
   from Mattei et al. 2014 (doi:10.1093/nar/gku283).
 
 structRMSD:
-  blebleble
+  Evaluates the local structural accuracy of predicted RNA 3D models by comparing them to a target structure motif by motif, 
+  rather than as a whole. Predictions are first filtered by their global TM-score, 
+  computed via USalign (https://github.com/pylelab/USalign), rejecting those below a chosen similarity threshold (default 0.45). 
+  For each retained prediction, every structural motif of the target — stems, hairpins, internal loops/bulges, 
+  multi-branch junctions, and single strands, 
+  identified via the rnapolis annotator (or supplied directly as a Dot-Bracket/BPSEQ secondary structure) — 
+  is extracted by residue range and locally superposed onto its counterpart in the prediction using the Kabsch algorithm 
+  (all-atom, Bio.PDB.Superimposer), yielding a per-motif RMSD. 
+  Results are aggregated across all retained predictions into a mean and standard deviation RMSD for each motif, 
+  highlighting which structural elements are reliably modeled and which are not.
 
 Usage:
   Single prediction RTBS:
@@ -47,6 +57,13 @@ Usage:
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
     parser.add_argument("-m", "--mbr", default="mbr_matrix.json", help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
+    parser.add_argument("--motif-tree", type=Path, default=None)
+    parser.add_argument("--dbn", type=Path, default=None)
+    parser.add_argument("--bpseq", type=Path, default=None)
+    parser.add_argument("--tm-threshold", type=float, default=0.45)
+    parser.add_argument("--usalign-bin", type=str, default=None)
+    parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
+    parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
     return parser.parse_args()
 
 
@@ -100,6 +117,10 @@ def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr):
         cmd = ["python3", RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
         run_command(cmd, quiet=False)
 
+def run_structRMSD(args, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    struct_rmsd_main(output_dir, args)
+
 
 def execute_rtbs(target, predictions, pred_dir, workdir, mbr):
     print("\n=====RTBS=====")
@@ -123,9 +144,11 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr):
     run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir, mbr)
     print("RTBS calculated")
 
-def execute_struct_rmsd(target, prediction_jsons, pred_dir, workdir):
+
+def execute_struct_rmsd(args, workdir):
     print("\n=====structRMSD=====")
     rtbs_dir = workdir / "structRMSD_results"
+    run_structRMSD(args, rtbs_dir)
 
 
 
@@ -156,13 +179,13 @@ def main():
 
     if args.tool is None:
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
-        execute_struct_rmsd(target, predictions, pred_dir, workdir)
+        execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
 
     elif args.tool == "structRMSD":
-        execute_struct_rmsd(target, predictions, pred_dir, workdir)
+        execute_struct_rmsd(args, workdir)
 
 
 if __name__ == "__main__":
