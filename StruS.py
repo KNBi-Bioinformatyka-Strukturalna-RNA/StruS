@@ -27,7 +27,16 @@ RNA Tree BEAR Similarity (RTBS) with RNA Tree Penalty Visualizer:
   from Mattei et al. 2014 (doi:10.1093/nar/gku283).
 
 structRMSD:
-  blebleble
+  Evaluates the local structural accuracy of predicted RNA 3D models by comparing them to a target structure motif by motif, 
+  rather than as a whole. Predictions are first filtered by their global TM-score, 
+  computed via USalign (https://github.com/pylelab/USalign), rejecting those below a chosen similarity threshold (default 0.45). 
+  For each retained prediction, every structural motif of the target — stems, hairpins, internal loops/bulges, 
+  multi-branch junctions, and single strands, 
+  identified via the rnapolis annotator (or supplied directly as a Dot-Bracket/BPSEQ secondary structure) — 
+  is extracted by residue range and locally superposed onto its counterpart in the prediction using the Kabsch algorithm 
+  (all-atom, Bio.PDB.Superimposer), yielding a per-motif RMSD. 
+  Results are aggregated across all retained predictions into a mean and standard deviation RMSD for each motif, 
+  highlighting which structural elements are reliably modeled and which are not.
 
 Usage:
   Single prediction RTBS:

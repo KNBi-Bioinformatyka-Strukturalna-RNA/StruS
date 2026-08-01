@@ -15,8 +15,8 @@ from rnapolis.common import BpSeq, DotBracket
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="RMSD motywow strukturalnych RNA (target vs predykcje), "
-                     "z filtrowaniem po globalnym TM-score."
+        description="RMSD of RNA structural motifs (target vs predictions), "
+                     "with global TM-score filtering."
     )
     parser.add_argument("--target", required=True, type=Path)
     parser.add_argument("--prediction", required=True, type=Path)
@@ -144,7 +144,7 @@ def run_annotator(target_pdb: Path, output_json: Path) -> Path:
             text=True,
         )
     except subprocess.CalledProcessError as e:
-        print(f"annotator zakonczyl sie bledem:\n{e.stderr}")
+        print(f"annotator failed with an error:\n{e.stderr}")
         raise
     return output_json
 
@@ -180,7 +180,7 @@ def get_motif_tree(
     tree_path = Path(target_pdb).with_suffix(".structure_tree.json")
     with open(tree_path, "w") as f:
         json.dump(elements, f, indent=2)
-    print(f"Zapisano liste motywow: {tree_path}")
+    print(f"Saved motif list: {tree_path}")
 
     return elements
 
@@ -233,7 +233,7 @@ def find_usalign_binary(usalign_bin: str | None) -> str:
     if Path("USalign").exists():
         return "./USalign"
 
-    print("USalign nie znaleziony - pobieram zrodlo i kompiluje (g++)...")
+    print("USalign not found - downloading source and compiling (g++)...")
     if not Path("USalign.cpp").exists():
         urllib.request.urlretrieve(
             "https://zhanggroup.org/US-align/bin/module/USalign.cpp", "USalign.cpp"
@@ -256,7 +256,7 @@ def compute_tm_score(target_pdb: Path, prediction_pdb: Path, usalign_bin: str) -
     lines = result.stdout.strip().split("\n")
     if len(lines) < 2:
         raise RuntimeError(
-            f"Nieoczekiwany output USalign dla {target_pdb} vs {prediction_pdb}: "
+            f"Unexpected USalign output for {target_pdb} vs {prediction_pdb}: "
             f"{result.stdout!r}"
         )
 
@@ -277,7 +277,7 @@ def filter_predictions_by_tm_score(
             passing.append((prediction_pdb, tm_score))
         else:
             print(
-                f"[pominieto] {prediction_pdb.name}: TM-score={tm_score:.3f} "
+                f"[skipped] {prediction_pdb.name}: TM-score={tm_score:.3f} "
                 f"< {threshold}"
             )
     return passing
@@ -315,7 +315,7 @@ def compute_motif_rmsd(
     coverage = len(common_keys) / len(target_atoms)
     if coverage < min_coverage:
         print(
-            f"[pominieto motyw] {motif['name']}: pokrycie atomow "
+            f"[motif skipped] {motif['name']}: atom coverage "
             f"{coverage:.0%} < {min_coverage:.0%}"
         )
         return None
@@ -359,11 +359,6 @@ def process_target(
 
 
 def aggregate_stats(records: list[dict]) -> list[dict]:
-    """
-    Grupuje po motif_id, liczy: n_predictions (tylko te z rmsd != None),
-    mean_rmsd, std_rmsd. Zwraca liste rekordow zbiorczych, po jednym per
-    motyw (posortowane po motif_id).
-    """
     by_motif: dict[int, list[dict]] = {}
     for record in records:
         by_motif.setdefault(record["motif_id"], []).append(record)
@@ -415,7 +410,6 @@ def write_summary_csv(summary: list[dict], out_path: Path):
 
 
 def main():
-    # args = kwargs
     args = parse_args()
     prediction = args.prediction if args.prediction else args.pred_dir
     motif_tree = get_motif_tree(args.target, args.motif_tree, args.dbn, args.bpseq)
@@ -449,8 +443,8 @@ def struct_rmsd_main(workdir, kwargs):
         args.target, prediction_paths, args.tm_threshold, usalign_bin
     )
     print(
-        f"{len(passing_predictions)}/{len(prediction_paths)} predykcji "
-        f"przeszlo prog TM-score >= {args.tm_threshold}"
+        f"{len(passing_predictions)}/{len(prediction_paths)} predictions "
+        f"passed the TM-score threshold >= {args.tm_threshold}"
     )
 
     records = process_target(Path(args.target), motif_tree, passing_predictions)
@@ -460,7 +454,7 @@ def struct_rmsd_main(workdir, kwargs):
     out_summary_path = os.path.join(workdir, args.out_summary)
     write_per_motif_csv(records, out_per_motif_path)
     write_summary_csv(summary, out_summary_path)
-    print(f"Zapisano {out_per_motif_path} i {out_summary_path}")
+    print(f"Saved {out_per_motif_path} and {out_summary_path}")
 
 
 if __name__ == "__main__":
