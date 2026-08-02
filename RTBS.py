@@ -194,27 +194,100 @@ def find_root(nodes):
     non_kids = [nid for nid in nodes if nid not in kids]
     if len(non_kids) == 1:
         return non_kids[0]
+    def reachable_count(start):
+        visited = set()
+        stack = [start]
+
+        while stack:
+            nid = stack.pop()
+
+            if nid in visited:
+                continue
+
+            if nid not in nodes:
+                continue
+
+            visited.add(nid)
+
+            for child in nodes[nid].get("children", []):
+                if child not in visited and child in nodes:
+                    stack.append(child)
+
+        return len(visited)
+
+    descendants_count = {
+        nid: reachable_count(nid)
+        for nid in nodes
+    }
+
+    max_count = max(descendants_count.values())
+    candidates = [
+        nid for nid, count in descendants_count.items()
+        if count == max_count
+    ]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # 4. Ostateczny fallback: najwcześniejszy nucleotide position
     def min_first(nid):
-        return min((s.get("first", 9999) for s in nodes[nid].get("strands", [])), default=9999)
-    return min(nodes.keys(), key=min_first)
+        return min(
+            (
+                s.get("first", 9999)
+                for s in nodes[nid].get("strands", [])
+            ),
+            default=9999
+        )
+
+    return min(candidates, key=min_first)
 
 def break_cycles(root, nodes):
     clean = {nid: dict(n) for nid, n in nodes.items()}
+
     for nid in clean:
         clean[nid]["children"] = list(clean[nid].get("children", []))
-    visited, queue = set(), [root]
-    while queue:
-        nid = queue.pop(0)
-        if nid not in clean or nid in visited:
-            continue
+
+    visited = set()
+    active = set()
+    removed_edges = []
+
+    def dfs(nid):
+        if nid not in clean:
+            return
+
         visited.add(nid)
-        valid = []
+        active.add(nid)
+
+        valid_children = []
+
         for ch in clean[nid]["children"]:
-            if ch not in visited and ch in clean:
-                valid.append(ch)
-                queue.append(ch)
-        clean[nid]["children"] = valid
-    return {nid: clean[nid] for nid in visited}
+            if ch not in clean:
+                continue
+
+            # Back-edge -> cycle
+            if ch in active:
+                removed_edges.append((nid, ch))
+                continue
+
+            valid_children.append(ch)
+
+            if ch not in visited:
+                dfs(ch)
+
+        clean[nid]["children"] = valid_children
+        active.remove(nid)
+
+    # Najpierw spróbuj od root
+    if root in clean:
+        dfs(root)
+
+    # Następnie przejdź również przez pozostałe komponenty
+    # żeby żaden węzeł nie został pominięty
+    for nid in clean:
+        if nid not in visited:
+            dfs(nid)
+
+    return clean, removed_edges
 
 #Local subtree matching with additional checking of the remaining nodes
 def normalize_name(name: str) -> str:
@@ -298,7 +371,6 @@ def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
     return result
 
 
-
 def find_best_mapping(nodes_t, nodes_p):
     memo = {}
     all_matches = []
@@ -356,11 +428,10 @@ def find_best_mapping(nodes_t, nodes_p):
 # Load target (once — shared across all predictions)
 nodes_t_raw = load_tree(args.target)
 root_t_raw  = find_root(nodes_t_raw)
-nodes_t     = break_cycles(root_t_raw, nodes_t_raw)
-root_t      = find_root(nodes_t)
-n_dropped_t = len(nodes_t_raw) - len(nodes_t)
-if n_dropped_t:
-    print(f"WARNING: target had cyclic edges; {n_dropped_t} back-edge(s) removed.")
+nodes_t, removed_edges = break_cycles(root_t_raw, nodes_t_raw)
+root_t = find_root(nodes_t)
+if removed_edges:
+    print(f"WARNING: target had cyclic edges; {len(removed_edges)} back-edge(s) removed.")
 
 target_name = pathlib.Path(args.target).stem
 n_target    = len(nodes_t)
@@ -383,15 +454,20 @@ V_SPACING = 2.5
 def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     #load & clean prediction tree
     nodes_p_raw = load_tree(pred_path)
-    root_p_raw  = find_root(nodes_p_raw)
-    nodes_p     = break_cycles(root_p_raw, nodes_p_raw)
-    root_p      = find_root(nodes_p)
-    n_dropped_p = len(nodes_p_raw) - len(nodes_p)
-    if n_dropped_p:
-        print(f"  WARNING: prediction had cyclic edges; {n_dropped_p} back-edge(s) removed.")
+    root_p_raw = find_root(nodes_p_raw)
+
+    nodes_p, removed_edges = break_cycles(root_p_raw, nodes_p_raw)
+
+    root_p = find_root(nodes_p)
+
+    if removed_edges:
+        print(
+            f"  WARNING: prediction had cyclic edges; "
+            f"{len(removed_edges)} back-edge(s) removed."
+        )
 
     pred_name = pred_path.stem
-    n_pred    = len(nodes_p)
+    n_pred = len(nodes_p)
 
     #mapping
     best_mapping   = find_best_mapping(nodes_t, nodes_p)
@@ -471,7 +547,57 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         pos[node_id] = (cx, y)
         return left, right, pos
 
-    _, _, pos_p = layout_tree(root_p, nodes_p)
+    def layout_forest(nodes, root):
+        pos = {}
+        placed = set()
+        COMPONENT_SPACING = V_SPACING * 4
+        def add_component(start_node, y_start):
+            component_pos = {}
+            _, _, component_pos = layout_tree(start_node, nodes, x=0, y=y_start, pos=component_pos, visited=set())
+            if not component_pos:
+                return component_pos, y_start
+            component_nodes = set(component_pos.keys())
+            left = min(x for x, y in component_pos.values())
+            right = max(x for x, y in component_pos.values())
+            center = (left + right) / 2
+            for nid in component_nodes:
+                x, y = component_pos[nid]
+                component_pos[nid] = (x - center, y)
+            min_y = min(
+                y for x, y in component_pos.values()
+            )
+
+            return component_pos, min_y
+        
+        if root in nodes:
+            component_pos, min_y = add_component(root, y_start=0)
+            pos.update(component_pos)
+            placed.update(component_pos.keys())
+            cur_y = min_y - COMPONENT_SPACING
+        else:
+            cur_y = 0
+
+        n_disconnected = 0
+        for nid in nodes:
+            if nid in placed:
+                continue
+            n_disconnected += 1
+            component_pos, min_y = add_component(nid, y_start=cur_y)
+            pos.update(component_pos)
+            placed.update(component_pos.keys())
+            cur_y = min_y - COMPONENT_SPACING
+
+        if n_disconnected > 0:
+            print(
+                f"  WARNING: prediction had disconnected components; "
+                f"{n_disconnected} disconnected component(s) found."
+            )
+
+        return pos
+
+
+    pos_p = layout_forest(nodes_p, root_p)
+    #_, _, pos_p = layout_tree(root_p, nodes_p)
 
     #colour mapping
     all_penalties = [info["penalty"] for info in node_info.values()]
@@ -577,8 +703,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         f"Sum penalty (sym):  {total_pen:+.2f}  (avg/node: {avg_pen:+.2f})\n"
         f"Sum penalty (tgt):  {total_pen_target:+.2f}  (avg/node: {avg_pen_target:+.2f})\n"
         f"RTBS (sym): {norm_penalty:.4f}  (1=best, 0=worst)\n"
-        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)\n"
-        f"  best={best_possible:.2f}  worst_sym={worst_sym:.2f}  worst_tgt={worst_target:.2f}"
+        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)"
     )
     ax.text(0.01, 0.99, info_txt,
             transform=ax.transAxes, va="top", ha="left", fontsize=8,
