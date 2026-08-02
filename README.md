@@ -16,14 +16,13 @@ A step by step series of examples that tell you how to get a development env run
 
 #### [Linux]
 
-Clone the repo and create virtual environment.
+Clone the repo and run the installer.
 
 ```bash
 git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git rna-model-error-detector
 cd rna-model-error-detector/StruS
-python -m venv .venv
-source .venv/bin/activate
-(.venv) pip install -r requirements.txt
+chmod +x install_strus.sh StruS
+./install_strus.sh
 ```
 
 #### [Windows]
@@ -43,19 +42,19 @@ python -m venv .venv
 ### Single prediction RTBS:
 
 ```bash
-(.venv) python StruS.py RTBS target.pdb prediction.pdb
+StruS RTBS target.pdb prediction.pdb
 ```
 
 ### Multiple predictions structRMSD:
 
 ```bash
-(.venv) python StruS.py structRMSD target.pdb -p predictions
+StruS structRMSD target.pdb -p predictions
 ```
 
 ### Run both tools with different output folder:
 
 ```bash
-(.venv) python StruS.py target.pdb prediction.pdb -o results
+StruS target.pdb prediction.pdb -o results
 ```
 
 # structRMSD

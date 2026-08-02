@@ -2,10 +2,13 @@
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 from structRMSD import struct_rmsd_main
 
-ANNOTATOR = "../../rnapolis-py/src/rnapolis/annotator.py"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PYTHON_BIN = sys.executable
+ANNOTATOR = str(SCRIPT_DIR / "rnapolis-py" / "src" / "rnapolis" / "annotator.py")
 CONVERTER = "annotation_converter.py"
 RTBS = "RTBS.py"
 
@@ -40,13 +43,13 @@ structRMSD:
 
 Usage:
   Single prediction RTBS:
-    python3 StruS.py RTBS target.pdb prediction.pdb
+        StruS RTBS target.pdb prediction.pdb
 
   Multiple predictions structRMSD:
-    python3 StruS.py structRMSD target.pdb -p predictions/
+        StruS structRMSD target.pdb -p predictions/
 
   Run both tools with different output folder:
-    python3 StruS.py target.pdb prediction.pdb -o results/
+        StruS target.pdb prediction.pdb -o results/
 
 """
     )
@@ -91,7 +94,7 @@ def check_pdb(path):
 def annotate_pdb(pdb_file, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_json = output_dir / f"{pdb_file.stem}.json"
-    cmd = ["python3", ANNOTATOR, str(pdb_file), "--json", str(out_json)]
+    cmd = [PYTHON_BIN, ANNOTATOR, str(pdb_file), "--json", str(out_json)]
     run_command(cmd)
     print("Annotated")
     return out_json
@@ -100,7 +103,7 @@ def annotate_pdb(pdb_file, output_dir):
 def convert_annotation(json_file, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_name = output_dir / f"{json_file.stem}.json"
-    cmd = ["python3", CONVERTER, str(json_file), "-o", str(out_name)]
+    cmd = [PYTHON_BIN, CONVERTER, str(json_file), "-o", str(out_name)]
     run_command(cmd)
     print("Converted")
     return out_name
@@ -111,10 +114,10 @@ def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr):
     if pred_dir is None:
         pred_json = prediction_jsons[0]
         out_file = output_dir / pred_json.stem
-        cmd = ["python3", RTBS, str(target_json), str(pred_json), "-o", str(out_file), "-m", str(mbr)]
+        cmd = [PYTHON_BIN, RTBS, str(target_json), str(pred_json), "-o", str(out_file), "-m", str(mbr)]
         run_command(cmd, quiet=False)
     else:
-        cmd = ["python3", RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
+        cmd = [PYTHON_BIN, RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
         run_command(cmd, quiet=False)
 
 def run_structRMSD(args, output_dir):
