@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from Bio.PDB import PDBParser, Superimposer
+from StruS.StruS import ANNOTATOR, PYTHON_BIN
 from rnapolis.common import BpSeq, DotBracket
 
 
@@ -135,17 +136,27 @@ def load_elements_from_bpseq(bpseq: "BpSeq") -> list[dict]:
     return elements
 
 
+def run_command(cmd, quiet=True):
+    print("Running:")
+    print(" ".join(map(str, cmd)))
+    if quiet:
+        result = subprocess.run(cmd,stdout=subprocess.DEVNULL)
+    else:
+        result = subprocess.run(cmd)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {result.returncode}")
+
 def run_annotator(target_pdb: Path, output_json: Path) -> Path:
-    try:
-        subprocess.run(
-            ["annotator", "--json", str(output_json), "--extended", str(target_pdb)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"annotator failed with an error:\n{e.stderr}")
-        raise
+    cmd = [
+        PYTHON_BIN,
+        ANNOTATOR,
+        str(target_pdb),
+        "--json",
+        str(output_json),
+        "--extended",
+    ]
+    run_command(cmd, quiet=False)
     return output_json
 
 

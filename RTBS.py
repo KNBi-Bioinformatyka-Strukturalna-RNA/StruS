@@ -426,12 +426,14 @@ def find_best_mapping(nodes_t, nodes_p):
     return best_mapping
 
 # Load target (once — shared across all predictions)
+target_was_cyclic = False
 nodes_t_raw = load_tree(args.target)
 root_t_raw  = find_root(nodes_t_raw)
-nodes_t, removed_edges = break_cycles(root_t_raw, nodes_t_raw)
+nodes_t, target_removed_edges = break_cycles(root_t_raw, nodes_t_raw)
 root_t = find_root(nodes_t)
-if removed_edges:
-    print(f"WARNING: target had cyclic edges; {len(removed_edges)} back-edge(s) removed.")
+if target_removed_edges:
+    target_was_cyclic = True
+    print(f"WARNING: target had cyclic edges; {len(target_removed_edges)} back-edge(s) removed.")
 
 target_name = pathlib.Path(args.target).stem
 n_target    = len(nodes_t)
@@ -452,6 +454,7 @@ H_SPACING = 3.2
 V_SPACING = 2.5
 
 def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
+    was_cyclic = False
     #load & clean prediction tree
     nodes_p_raw = load_tree(pred_path)
     root_p_raw = find_root(nodes_p_raw)
@@ -461,6 +464,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     root_p = find_root(nodes_p)
 
     if removed_edges:
+        was_cyclic = True
         print(
             f"  WARNING: prediction had cyclic edges; "
             f"{len(removed_edges)} back-edge(s) removed."
@@ -593,10 +597,10 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                 f"{n_disconnected} disconnected component(s) found."
             )
 
-        return pos
+        return pos, n_disconnected
 
 
-    pos_p = layout_forest(nodes_p, root_p)
+    pos_p, n_disconnected = layout_forest(nodes_p, root_p)
     #_, _, pos_p = layout_tree(root_p, nodes_p)
 
     #colour mapping
@@ -695,6 +699,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                  transform=cbar_ax.transAxes)
 
     # info box
+
     info_txt = (
         f"Target:     {target_name}  ({n_target} nodes)\n"
         f"Prediction: {pred_name}  ({n_pred} nodes)\n"
@@ -703,8 +708,25 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         f"Sum penalty (sym):  {total_pen:+.2f}  (avg/node: {avg_pen:+.2f})\n"
         f"Sum penalty (tgt):  {total_pen_target:+.2f}  (avg/node: {avg_pen_target:+.2f})\n"
         f"RTBS (sym): {norm_penalty:.4f}  (1=best, 0=worst)\n"
-        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)"
+        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)\n"
     )
+    if target_was_cyclic:
+        info_txt += (
+            f"\nWARNING: target had cyclic edges; "
+            f"{len(target_removed_edges)} back-edge(s) removed. Details in .json file."
+        )
+    if was_cyclic:
+        info_txt += (
+            f"\nWARNING: prediction had cyclic edges; "
+            f"{len(removed_edges)} back-edge(s) removed. Details in .json file."
+        )
+
+    if n_disconnected > 0:
+        info_txt += (
+            f"\nWARNING: prediction had disconnected components; "
+            f"{n_disconnected} disconnected component(s) found."
+        )
+        
     ax.text(0.01, 0.99, info_txt,
             transform=ax.transAxes, va="top", ha="left", fontsize=8,
             family="monospace",
@@ -747,7 +769,9 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
          "matched":          False}
         for nid in unmatched_target_ids
     ]
-
+    was_disconnected = False
+    if n_disconnected >0:
+        was_disconnected = True
     summary = {
         "target":                    target_name,
         "prediction":                pred_name,
@@ -765,6 +789,10 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         "worst_possible_sym":        round(worst_sym, 4),
         "worst_possible_target":     round(worst_target, 4),
         "unmatched_penalty":         round(UNMATCHED_PENALTY, 4),
+        "was_cyclic":                was_cyclic,
+        "removed_edges":             removed_edges,
+        "was_disconnected":          was_disconnected,
+        "n_disconnected":            n_disconnected,
         "prediction_nodes":          report_pred,
         "unmatched_target_nodes":    report_target_unmatched,
     }
