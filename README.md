@@ -19,7 +19,7 @@ A step by step series of examples that tell you how to get a development env run
 Clone the repo and run the installer.
 
 ```bash
-git clone [https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git](https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS) StruS
+git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS StruS
 cd StruS
 chmod +x install_strus.sh StruS
 ./install_strus.sh
@@ -30,7 +30,7 @@ chmod +x install_strus.sh StruS
 Clone the repo and create virtual environment.
 
 ```pwsh
-git clone [https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/rna-model-error-detector.git](https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS) StruS
+git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS StruS
 cd StruS
 python -m venv .venv
 .venv\Scripts\activate
