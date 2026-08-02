@@ -194,21 +194,17 @@ def find_root(nodes):
     non_kids = [nid for nid in nodes if nid not in kids]
     if len(non_kids) == 1:
         return non_kids[0]
+      
     def reachable_count(start):
         visited = set()
         stack = [start]
-
         while stack:
             nid = stack.pop()
-
             if nid in visited:
                 continue
-
             if nid not in nodes:
                 continue
-
             visited.add(nid)
-
             for child in nodes[nid].get("children", []):
                 if child not in visited and child in nodes:
                     stack.append(child)
@@ -219,17 +215,14 @@ def find_root(nodes):
         nid: reachable_count(nid)
         for nid in nodes
     }
-
     max_count = max(descendants_count.values())
     candidates = [
         nid for nid, count in descendants_count.items()
         if count == max_count
     ]
-
     if len(candidates) == 1:
         return candidates[0]
 
-    # 4. Ostateczny fallback: najwcześniejszy nucleotide position
     def min_first(nid):
         return min(
             (
@@ -243,46 +236,30 @@ def find_root(nodes):
 
 def break_cycles(root, nodes):
     clean = {nid: dict(n) for nid, n in nodes.items()}
-
     for nid in clean:
         clean[nid]["children"] = list(clean[nid].get("children", []))
-
     visited = set()
     active = set()
     removed_edges = []
-
     def dfs(nid):
         if nid not in clean:
             return
-
         visited.add(nid)
         active.add(nid)
-
         valid_children = []
-
         for ch in clean[nid]["children"]:
             if ch not in clean:
                 continue
-
-            # Back-edge -> cycle
             if ch in active:
                 removed_edges.append((nid, ch))
                 continue
-
             valid_children.append(ch)
-
             if ch not in visited:
                 dfs(ch)
-
         clean[nid]["children"] = valid_children
         active.remove(nid)
-
-    # Najpierw spróbuj od root
     if root in clean:
         dfs(root)
-
-    # Następnie przejdź również przez pozostałe komponenty
-    # żeby żaden węzeł nie został pominięty
     for nid in clean:
         if nid not in visited:
             dfs(nid)
@@ -315,7 +292,6 @@ def nucleotide_range_match(node_a, node_b):
             if ((a1 <= b1 and a2 >= b2) or (b1 <= a1 and b2 >= a2)):
                 return True
     return False
-
 
 
 def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
@@ -392,22 +368,6 @@ def find_best_mapping(nodes_t, nodes_p):
         for t, p in mapping:
             used_t.add(t)
             used_p.add(p)
-
-    #target_leaves = [nid for nid, node in nodes_t.items() if not node.get("children")]
-    #prediction_leaves = [nid for nid, node in nodes_p.items() if not node.get("children")]
-    #for lt in target_leaves:
-    #    if lt in used_t:
-    #        continue
-    #    for lp in prediction_leaves:
-    #        if lp in used_p:
-    #            continue
-    #        if normalize_name(nodes_t[lt]["name"]) != normalize_name(nodes_p[lp]["name"]):
-    #            continue
-    #        if leaf_nucleotide_match(nodes_t[lt], nodes_p[lp]):
-    #            best_mapping.append((lt, lp))
-    #            used_t.add(lt)
-    #            used_p.add(lp)
-    #            break
 
     remaining_t = [nid for nid in nodes_t if nid not in used_t]
     remaining_p = [nid for nid in nodes_p if nid not in used_p]
@@ -601,7 +561,6 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
 
 
     pos_p, n_disconnected = layout_forest(nodes_p, root_p)
-    #_, _, pos_p = layout_tree(root_p, nodes_p)
 
     #colour mapping
     all_penalties = [info["penalty"] for info in node_info.values()]
@@ -682,15 +641,6 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     tick_vals = sorted({safe_vmin, safe_vmax, 0.0})
     cbar.set_ticks(tick_vals)
     cbar.set_ticklabels([f"{v:+.2f}" for v in tick_vals])
-    #tick_vals = sorted({
-    #    round(p_min, 2),
-    #    round(p_max, 2),
-    #    0.0,
-    #    round(UNMATCHED_PENALTY, 2),
-    #})
-    #tick_vals = [t for t in tick_vals if safe_vmin <= t <= safe_vmax]
-    #cbar.set_ticks(tick_vals)
-    #cbar.set_ticklabels([f"{v:+.2f}" for v in tick_vals], fontsize=7)
     cbar_ax.text(0.5,  1.01, "worst\nmatch", ha="center", va="bottom",
                  fontsize=9, color="#e74c3c", fontweight="bold",
                  transform=cbar_ax.transAxes)
@@ -699,7 +649,6 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                  transform=cbar_ax.transAxes)
 
     # info box
-
     info_txt = (
         f"Target:     {target_name}  ({n_target} nodes)\n"
         f"Prediction: {pred_name}  ({n_pred} nodes)\n"
