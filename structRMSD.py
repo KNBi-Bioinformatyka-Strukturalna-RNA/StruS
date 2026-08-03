@@ -10,8 +10,8 @@ import urllib.request
 from pathlib import Path
 
 from Bio.PDB import PDBParser, Superimposer
-from StruS.StruS import ANNOTATOR, PYTHON_BIN
 from rnapolis.common import BpSeq, DotBracket
+from config import ANNOTATOR, PYTHON_BIN
 
 
 def parse_args():

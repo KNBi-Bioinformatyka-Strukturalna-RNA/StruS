@@ -5,12 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from structRMSD import struct_rmsd_main
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-PYTHON_BIN = sys.executable
-ANNOTATOR = str(SCRIPT_DIR / "rnapolis-py" / "src" / "rnapolis" / "annotator.py")
-CONVERTER = "annotation_converter.py"
-RTBS = "RTBS.py"
+from config import PYTHON_BIN, ANNOTATOR, CONVERTER, RTBS, MBR
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -59,7 +54,7 @@ Usage:
     parser.add_argument("prediction", nargs="?", default=None, help="Single prediction (.pdb). Do not use together with -p.")
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
-    parser.add_argument("-m", "--mbr", default="mbr_matrix.json", help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
+    parser.add_argument("-m", "--mbr", default=MBR, help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)

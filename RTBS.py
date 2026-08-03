@@ -179,6 +179,16 @@ def mbr_penalty(node_target: dict, node_pred: dict) -> tuple:
     return -score, bt, bp
 
 # Load / cycle-break helpers
+def validate_prediction_file(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list) or len(data) == 0:
+            return False, "empty or invalid JSON structure"
+        return True, None
+    except Exception as e:
+        return False, str(e)
+    
 def load_tree(path) -> dict:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -386,6 +396,10 @@ def find_best_mapping(nodes_t, nodes_p):
     return best_mapping
 
 # Load target (once — shared across all predictions)
+valid, reason = validate_prediction_file(args.target)
+if not valid:
+    print(f"  WARNING: target got ValidationError: {reason})")
+    sys.exit()
 target_was_cyclic = False
 nodes_t_raw = load_tree(args.target)
 root_t_raw  = find_root(nodes_t_raw)
@@ -752,16 +766,6 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
 
     print(f"  Saved: {out_path}  |  RTBS_sym={norm_penalty:.4f}  RTBS_tgt={norm_penalty_target:.4f}")
     return norm_penalty, norm_penalty_target, summary
-
-def validate_prediction_file(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list) or len(data) == 0:
-            return False, "empty or invalid JSON structure"
-        return True, None
-    except Exception as e:
-        return False, str(e)
     
 #Run: single file or folder
 if args.pred_dir:
@@ -850,4 +854,8 @@ else:
     pred_path = pathlib.Path(args.prediction)
     out_path  = pathlib.Path(args.output) if args.output else pathlib.Path("penalty_tree.png")
     print(f"Processing: {pred_path.name}")
-    process_prediction(pred_path, out_path)
+    valid, reason = validate_prediction_file(pred_path)
+    if not valid:
+        print(f"  WARNING: ValidationError: {reason})")
+    else:
+        process_prediction(pred_path, out_path)
