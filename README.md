@@ -21,6 +21,8 @@ Clone the repo and run the installer.
 ```bash
 git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS StruS
 cd StruS
+git submodule init
+git submodule update --recursive
 chmod +x install_strus.sh StruS
 ./install_strus.sh
 ```
@@ -32,6 +34,8 @@ Clone the repo and create virtual environment.
 ```pwsh
 git clone https://github.com/KNBi-Bioinformatyka-Strukturalna-RNA/StruS StruS
 cd StruS
+git submodule init
+git submodule update --recursive
 python -m venv .venv
 .venv\Scripts\activate
 (.venv) pip install -r requirements.txt
@@ -74,10 +78,13 @@ The program performs the following steps:
 ## Features
 
 - automatic motif detection using **annotator** (rnapolis)
+- automatic motif detection using **FR3D** (fr3d-python, `latest` branch)
 - motif extraction directly from **Dot-Bracket** or **BPSEQ**
 - reuse of previously generated motif lists
 - automatic filtering of predictions using global TM-score
 - all-atom local RMSD calculation for every motif
+- local TM-score calculation for every motif (where the motif is long enough)
+- support for multi-chain targets and predictions
 - CSV export of detailed and summary results
 
 ## Assumptions
@@ -85,7 +92,6 @@ The program performs the following steps:
 RNAMotifFinder assumes that:
 
 - each execution analyses **one reference RNA structure (target)**;
-- the target and all predictions contain the **same RNA chain** (default: chain `A`);
 - residue numbering is identical between the target and every prediction;
 - corresponding residues represent the same nucleotides.
 
@@ -99,6 +105,8 @@ and therefore does **not** perform sequence alignment or residue renumbering aut
 
 If residue numbering differs between the target and predictions, RMSD values may be incorrect or motifs may be skipped because matching atoms cannot be found.
 
+**Multi-chain targets are supported.** If the target and all predictions have the same number of chains, they are matched by position automatically (first chain of the target with the first chain of the prediction, and so on). If the target has more chains than a prediction (e.g. a monomeric prediction against a multi-chain target), the target is reduced to a single chain - by default the first one found, or a specific one selected with `--target-chain`.
+
 To analyse multiple targets, run the program separately for each target.
 
 ---
@@ -108,7 +116,7 @@ To analyse multiple targets, run the program separately for each target.
 The following arguments are always required:
 
 - reference RNA structure (`--target`)
-- one prediction or a directory containing multiple predictions 
+- one prediction or a directory containing multiple predictions (`--prediction`)
 
 The target structure must contain 3D atomic coordinates because they are required for RMSD calculation.
 
@@ -118,11 +126,36 @@ Dot-Bracket and BPSEQ files contain only secondary structure information. They a
 
 ## Motif sources
 
-Structural motifs can be obtained from four different sources.
+Structural motifs can be obtained from five different sources. Exactly one source must be selected; if none is given, the program defaults to **FR3D**.
 
-## 1. Annotator (default)
+## 1. FR3D (default)
 
-If no additional option is provided, motifs are generated automatically using the **annotator** tool from the **rnapolis** package.
+If no other motif source is given, motifs are generated automatically using **FR3D** (`fr3d-python`, `latest` branch).
+
+```
+target.pdb
+      │
+      ▼
+FR3D (NA_pairwise_interactions)
+      │
+      ▼
+basepairs list
+      │
+      ▼
+keep only canonical cWW A-U / G-C / G-U pairs
+      │
+      ▼
+BPSEQ
+      │
+      ▼
+motif list
+```
+
+## 2. Annotator 
+
+```
+--annotator
+```
 
 ```
 target.pdb
@@ -139,7 +172,7 @@ motif list
 
 ---
 
-## 2. Previously generated motif list
+## 3. Previously generated motif list
 
 Previously generated motif lists can be reused.
 
@@ -151,9 +184,13 @@ No motif detection is performed.
 
 ---
 
-## 3. Dot-Bracket file
+## 4. Dot-Bracket file
 
 Motifs can be extracted directly from a Dot-Bracket file.
+
+```
+--dbn target.dbn
+```
 
 ```
 target.dbn
@@ -173,11 +210,17 @@ motif list
 
 The program uses the same underlying mechanism (`BpSeq.elements`) as the `motif-extractor` utility from rnapolis, but accesses it directly through the Python API instead of executing the external program.
 
+Multi-chain Dot-Bracket files are supported: chains are detected and, if `--target-chain` is given, motifs spanning more than one chain are dropped and the rest are renumbered to that chain.
+
 ---
 
-## 4. BPSEQ file
+## 5. BPSEQ file
 
 Motifs can also be extracted from a BPSEQ file.
+
+```
+--bpseq target.bpseq
+```
 
 ```
 target.bpseq
@@ -192,44 +235,45 @@ bpseq.elements
 motif list
 ```
 
+An externally supplied BPSEQ file describes one fixed numbering of the target as a whole. `--target-chain` has no effect with this source.
+
 ---
 
 ## Workflow
 
 ```
-                     target.pdb
+                                 target.pdb
+                                     │
+           ┌───────────┬─────────────┼──────────────┬──────────────┐
+           │           │             │              │              │
+         FR3D      annotator      DBN/BPSEQ   structure_tree.json  │
+           │           │             │              │              │
+           └───────────┴─────────────┴──────────────┴──────────────┘
+                                     │
+                               motif list
+                                     │
+                                     ▼
+                            prediction PDB(s)
+                                     │
+                            global TM-score
+                                (USalign)
+                                     │
+                         TM-score >= threshold ?
                           │
-          ┌───────────────┼─────────────────┐
-          │               │                 │
-          │               │                 │
-     annotator         DBN/BPSEQ     structure_tree.json
-          │               │                 │
-          └───────────────┴─────────────────┘
+                    no ────┘
                           │
-                    motif list
+                         yes
                           │
                           ▼
-                 prediction PDB(s)
+                local motif superposition
+               (Bio.PDB.Superimposer)
                           │
-                 global TM-score
-                     (USalign)
+                          ▼
+                 motif RMSD + motif TM-score
                           │
-              TM-score >= threshold ?
-                   │
-            no ────┘
-                   │
-                  yes
-                   │
-                   ▼
-        local motif superposition
-       (Bio.PDB.Superimposer)
-                   │
-                   ▼
-               motif RMSD
-                   │
-                   ▼
-        per_motif_rmsd.csv
-        motif_summary.csv
+                          ▼
+                 per_motif_rmsd.csv
+                 motif_summary.csv
 ```
 
 ---
@@ -253,6 +297,14 @@ If the fraction of matched atoms is below the selected coverage threshold (90% b
 
 ---
 
+## Motif TM-score calculation
+
+In addition to RMSD, the program also attempts to compute a local TM-score for every motif, using USalign on just that motif's residues (extracted to a temporary fragment PDB for both target and prediction).
+
+This requires at least 3 residues in the motif - USalign cannot produce a usable result on shorter fragments. Motifs with fewer than 3 residues have an empty `motif_tm_score` value, while `motif_rmsd` is still calculated normally for them.
+
+---
+
 ## Prediction filtering
 
 Before motif analysis, every prediction is compared against the reference structure using **USalign**.
@@ -273,18 +325,35 @@ The threshold can be changed using
 
 ---
 
+## USalign
+
+The repository includes a precompiled `USalign` binary, but it is compiled for **Linux**. On **macOS** or **Windows** this binary will not run - `USalign.cpp` must be compiled locally instead (or let the program do it automatically, see below).
+
+If `USalign` is not found (as an executable in `PATH`, or as `./USalign` in the current directory), the program downloads `USalign.cpp` from the official source and compiles it automatically with `g++` on first run. This requires an internet connection and a working C++ compiler. The resulting `./USalign` binary is then reused on later runs.
+
+A specific binary can also be provided manually with `--usalign-bin`.
+
+---
+
 ## Command-line options
 
 | Argument | Description |
 |----------|-------------|
+| `--target` | reference RNA structure (required) |
+| `--prediction` | single prediction file or a directory of predictions (required) |
+| `--target-chain` | chain to reduce the target to, for multi-chain targets |
 | `--motif-tree` | previously generated motif list |
 | `--dbn` | Dot-Bracket secondary structure |
 | `--bpseq` | BPSEQ secondary structure |
+| `--annotator` | detect motifs using the rnapolis annotator |
+| `--annotator-json` | reuse an already-generated annotator JSON instead of running annotator again (used with `--annotator`) |
+| `--fr3d` | detect motifs using FR3D (default if no other source is given) |
 | `--tm-threshold` | minimum accepted TM-score (default: 0.45) |
-| `--usalign-bin` | path to USalign executable |
-| `--out-per-motif` | output CSV containing per-motif RMSD values |
+| `--usalign-bin` | path to USalign executable (auto-detected/downloaded if not given) |
+| `--out-per-motif` | output CSV containing per-motif results |
 | `--out-summary` | output CSV containing summary statistics |
 
+Exactly one of `--motif-tree`, `--dbn`, `--bpseq`, `--annotator`, `--fr3d` may be given at a time.
 ---
 
 ## Output files
@@ -303,8 +372,10 @@ Columns:
 - `motif_type`
 - `residue_range`
 - `prediction_file`
-- `tm_score`
-- `rmsd`
+- `motif_tm_score` - TM-score of this motif alone (empty if the motif has fewer than 3 residues, or if USalign failed on the fragment)
+- `motif_rmsd` - RMSD of this motif alone
+
+Only predictions that passed the global TM-score filter appear in this file.
 
 ---
 
@@ -344,13 +415,15 @@ Loop motifs are classified automatically according to the number and length of t
 
 ## Notes
 
-- Structural motifs can be obtained from annotator, Dot-Bracket, BPSEQ or a previously generated motif list.
+- Structural motifs can be obtained from FR3D, annotator, Dot-Bracket, BPSEQ, or a previously generated motif list.
+- If no motif source is given, the program defaults to FR3D.
 - Dot-Bracket and BPSEQ files are used **only to identify structural motifs**.
 - RMSD is always calculated from 3D atomic coordinates stored in the target and prediction structures.
 - The program assumes consistent residue numbering between the target and all predictions.
 - The program performs local superposition independently for every motif using the Kabsch algorithm implemented in BioPython.
 - All atoms belonging to a motif are included in the RMSD calculation (all-atom RMSD).
 - Predictions whose global TM-score is below the selected threshold are excluded before motif-level analysis.
+- If a prediction's total residue count doesn't match the target's, motifs whose residues extend beyond the prediction's range are skipped individually (with a message) rather than skipping the whole prediction.
 
 
 # RTBS

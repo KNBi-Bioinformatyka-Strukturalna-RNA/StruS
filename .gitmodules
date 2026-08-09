@@ -1,0 +1,3 @@
+[submodule "fr3d-python"]
+	path = fr3d-python
+	url = https://github.com/BGSU-RNA/fr3d-python.git

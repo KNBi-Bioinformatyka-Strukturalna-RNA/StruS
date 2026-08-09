@@ -55,10 +55,13 @@ Usage:
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
     parser.add_argument("-m", "--mbr", default=MBR, help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script)")
+    parser.add_argument("--annotator", action="store_true")
+    parser.add_argument("--fr3d", action="store_true")
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
     parser.add_argument("--tm-threshold", type=float, default=0.45)
+    parser.add_argument("--target-chain", type=str, default=None)
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
@@ -147,7 +150,6 @@ def execute_struct_rmsd(args, workdir):
     print("\n=====structRMSD=====")
     rtbs_dir = workdir / "structRMSD_results"
     run_structRMSD(args, rtbs_dir)
-
 
 
 def main():
