@@ -5,16 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from structRMSD import struct_rmsd_main
-from config import (
-    PYTHON_BIN,
-    ANNOTATOR,
-    CONVERTER,
-    RTBS,
-    MBR,
-    FR3D,
-    FR3D_TO_DBN,
-    CONVERTER_FROM_DBN,
-)
+from config import (PYTHON_BIN, ANNOTATOR, CONVERTER, RTBS, MBR, FR3D, FR3D_TO_DBN, CONVERTER_FROM_DBN, ANNOTATOR_TO_DBN)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -152,6 +143,15 @@ def fr3d_to_dbn(basepair_file, pdb_file, output_dir):
     return out_file
 
 
+def annotator_to_dbn(json_file, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_file = output_dir / f"{json_file.stem}.dbn"
+    cmd = [PYTHON_BIN, ANNOTATOR_TO_DBN, str(json_file), "-o", str(out_file)]
+    run_command(cmd)
+    print("Converted annotator output to DBN")
+    return out_file
+
+
 def convert_from_dbn(dbn_file, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_name = output_dir / f"{Path(dbn_file).stem}.json"
@@ -184,24 +184,28 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", che
 
     if source == "annotator":
         annotator_dir = workdir / "annotated_rnapolis"
-        converted_dir = workdir / "converted_rnapolis"
+        dbn_dir = workdir / "dbn_annotator"
+        converted_dir = workdir / "converted_annotator"
         annotator_target_dir = annotator_dir / "target"
+        dbn_target_dir = dbn_dir / "target"
         converted_target_dir = converted_dir / "target"
 
         print("\nAnnotating target:")
         target_json = annotate_pdb(target, annotator_target_dir)
-        converted_target = convert_annotation(target_json, converted_target_dir)
+        target_dbn = annotator_to_dbn(target_json, dbn_target_dir)
+        converted_target = convert_from_dbn(target_dbn, converted_target_dir)
 
         prediction_jsons = []
         for pred in predictions:
             print(f"\nAnnotating prediction {pred.name}:")
             pred_json = annotate_pdb(pred, annotator_dir)
-            converted = convert_annotation(pred_json, converted_dir)
+            pred_dbn = annotator_to_dbn(pred_json, dbn_dir)
+            converted = convert_from_dbn(pred_dbn, converted_dir)
             prediction_jsons.append(converted)
 
     elif source == "fr3d":
         annotated_dir = workdir / "annotated_fr3d"
-        dbn_dir = workdir / "dbn"
+        dbn_dir = workdir / "dbn_fr3d"
         converted_dir = workdir / "converted_fr3d"
         annotated_target_dir = annotated_dir / "target"
         dbn_target_dir = dbn_dir / "target"
