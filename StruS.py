@@ -55,10 +55,12 @@ Usage:
     parser.add_argument("-p", "--pred_dir", default=None, help="Directory containing prediction PDB files.")
     parser.add_argument("-o", "--out_dir", default="StruS_out", help="Working output directory (default: StruS_out)")
     parser.add_argument("-m", "--mbr", default=MBR, help="Path to MBR JSON matrix (default: mbr_matrix.json next to this script) for RTBS.")
+    parser.add_argument("-t", "--threshold", default=2, help="Number of matching nodes in the subtree to match the prediction and target in RTBS.")
     parser.add_argument("--annotator", action="store_true", help="Use the rnapolis annotator to find structural elements.")
     parser.add_argument("--fr3d", action="store_true", help="Use FR3D to find structural elements.")
     parser.add_argument("--dbn_rtbs", action="store_true", help="Use existing .dbn files to calculate RTBS.")
     parser.add_argument("--check_sequence_always", action="store_true", help="Require sequence compatibility when matching subtrees in RTBS, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence.")
+    parser.add_argument("--remove_pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' and ')' are permanently replaced with '.'.")
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
@@ -126,7 +128,7 @@ def convert_annotation(json_file, output_dir):
 def run_fr3d(pdb_file, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     cmd = [PYTHON_BIN, FR3D, str("./"+str(pdb_file)), "-o", str(output_dir)]
-    run_command(cmd)
+    run_command(cmd, quiet=True)
     print("FR3D annotated")
     basepair_file = output_dir / f"{pdb_file.stem}_basepair.txt"
     if not basepair_file.exists():
@@ -152,23 +154,26 @@ def annotator_to_dbn(json_file, output_dir):
     return out_file
 
 
-def convert_from_dbn(dbn_file, output_dir):
+def convert_from_dbn(dbn_file, output_dir, remove_pseudoknots=False):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_name = output_dir / f"{Path(dbn_file).stem}.json"
-    cmd = [PYTHON_BIN, CONVERTER_FROM_DBN, str(dbn_file), "--output", str(out_name)]
-    run_command(cmd)
+    if remove_pseudoknots:
+        cmd = [PYTHON_BIN, CONVERTER_FROM_DBN, str(dbn_file), "--output", str(out_name), "--remove_pseudoknots"]
+    else:
+        cmd = [PYTHON_BIN, CONVERTER_FROM_DBN, str(dbn_file), "--output", str(out_name)]
+    run_command(cmd, quiet=False)
     print("Converted DBN")
     return out_name
 
 
-def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr, check_sequence_always=False):
+def run_rtbs(target_json, prediction_jsons, pred_dir, output_dir, mbr, check_sequence_always=False, treshold=2):
     output_dir.mkdir(parents=True, exist_ok=True)
     if pred_dir is None:
         pred_json = prediction_jsons[0]
         out_file = output_dir / pred_json.stem
-        cmd = [PYTHON_BIN, RTBS, str(target_json), str(pred_json), "-o", str(out_file), "-m", str(mbr)]
+        cmd = [PYTHON_BIN, RTBS, str(target_json), str(pred_json), "-o", str(out_file), "-m", str(mbr), "-t", str(treshold)]
     else:
-        cmd = [PYTHON_BIN, RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr)]
+        cmd = [PYTHON_BIN, RTBS, str(target_json), "-p", str(prediction_jsons[0].parent), "-o", str(output_dir), "-m", str(mbr), "-t", str(treshold)]
     if check_sequence_always:
         cmd.append("--check_sequence_always")
     run_command(cmd, quiet=False)
@@ -178,7 +183,7 @@ def run_structRMSD(args, output_dir):
     struct_rmsd_main(output_dir, args)
 
 
-def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", check_sequence_always=False):
+def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", check_sequence_always=False, remove_pseudoknots = False, threshold = 2):
     print("\n=====RTBS=====")
     rtbs_dir = workdir / "RTBS_results"
 
@@ -193,14 +198,14 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", che
         print("\nAnnotating target:")
         target_json = annotate_pdb(target, annotator_target_dir)
         target_dbn = annotator_to_dbn(target_json, dbn_target_dir)
-        converted_target = convert_from_dbn(target_dbn, converted_target_dir)
+        converted_target = convert_from_dbn(target_dbn, converted_target_dir, remove_pseudoknots)
 
         prediction_jsons = []
         for pred in predictions:
             print(f"\nAnnotating prediction {pred.name}:")
             pred_json = annotate_pdb(pred, annotator_dir)
             pred_dbn = annotator_to_dbn(pred_json, dbn_dir)
-            converted = convert_from_dbn(pred_dbn, converted_dir)
+            converted = convert_from_dbn(pred_dbn, converted_dir, remove_pseudoknots)
             prediction_jsons.append(converted)
 
     elif source == "fr3d":
@@ -214,14 +219,14 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", che
         print("\nRunning FR3D on target:")
         target_bp = run_fr3d(target, annotated_target_dir)
         target_dbn = fr3d_to_dbn(target_bp, target, dbn_target_dir)
-        converted_target = convert_from_dbn(target_dbn, converted_target_dir)
+        converted_target = convert_from_dbn(target_dbn, converted_target_dir, remove_pseudoknots)
 
         prediction_jsons = []
         for pred in predictions:
             print(f"\nRunning FR3D on prediction {pred.name}:")
             pred_bp = run_fr3d(pred, annotated_dir)
             pred_dbn = fr3d_to_dbn(pred_bp, pred, dbn_dir)
-            converted = convert_from_dbn(pred_dbn, converted_dir)
+            converted = convert_from_dbn(pred_dbn, converted_dir, remove_pseudoknots)
             prediction_jsons.append(converted)
 
     elif source == "dbn":
@@ -229,19 +234,19 @@ def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", che
         converted_target_dir = converted_dir / "target"
 
         print("\nConverting target DBN:")
-        converted_target = convert_from_dbn(target, converted_target_dir)
+        converted_target = convert_from_dbn(target, converted_target_dir, remove_pseudoknots)
 
         prediction_jsons = []
         for pred in predictions:
             print(f"\nConverting prediction DBN {pred.name}:")
-            converted = convert_from_dbn(pred, converted_dir)
+            converted = convert_from_dbn(pred, converted_dir, remove_pseudoknots)
             prediction_jsons.append(converted)
 
     else:
         raise ValueError(f"Unknown RTBS source: {source}")
 
     print("\nCalculating RTBS:")
-    run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir, mbr, check_sequence_always=check_sequence_always)
+    run_rtbs(converted_target, prediction_jsons, pred_dir, rtbs_dir, mbr, check_sequence_always=check_sequence_always, treshold=threshold)
     print("RTBS calculated")
 
 
@@ -292,11 +297,11 @@ def main():
         raise RuntimeError("Provide a prediction file or -p prediction_folder")
 
     if args.tool == "BOTH":
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, threshold=args.threshold)
         execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, threshold=args.threshold)
 
     elif args.tool == "structRMSD":
         execute_struct_rmsd(args, workdir)

@@ -76,8 +76,9 @@ parser.add_argument("-o", "--output", default=None,
 parser.add_argument("--show", action="store_true",
     help="Display each plot interactively")
 parser.add_argument("--check_sequence_always", action="store_true",
-    help="Require sequence compatibility when matching subtrees, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence."
-)
+    help="Require sequence compatibility when matching subtrees, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence.")
+parser.add_argument("-t", "--threshold", default=2,
+    help="Number of matching nodes in the subtree to match the prediction and target fragments.")
 args = parser.parse_args()
 
 #Validate argument combinations
@@ -328,10 +329,9 @@ def break_cycles(root, nodes):
 def sequence_coverage(node_a, node_b):
     strands_a = node_a.get("strands", [])
     strands_b = node_b.get("strands", [])
-
     if not strands_a or not strands_b:
         return 0.0
-
+    
     sequences_a = [
         s.get("sequence", "").upper()
         for s in strands_a
@@ -342,17 +342,14 @@ def sequence_coverage(node_a, node_b):
         for s in strands_b
         if s.get("sequence")
     ]
-
     if not sequences_a or not sequences_b:
         return 0.0
-
+    
     best_coverage = 0.0
-
     for seq_a in sequences_a:
         for seq_b in sequences_b:
             if not seq_a or not seq_b:
                 continue
-
             if seq_a in seq_b:
                 coverage = len(seq_a) / len(seq_b)
             elif seq_b in seq_a:
@@ -458,13 +455,13 @@ def match_remaining_by_sequence(nodes_t, nodes_p, remaining_t, remaining_p):
     return mapping
 
 
-def find_best_mapping(nodes_t, nodes_p, check_sequence=False):
+def find_best_mapping(nodes_t, nodes_p, check_sequence=False, threshold=2):
     memo = {}
     all_matches = []
     for nid_t in nodes_t:
         for nid_p in nodes_p:
             score, mapping = match_subtree(nodes_t, nid_t, nodes_p, nid_p, memo, check_sequence=check_sequence)
-            if score >= 2:
+            if score >= int(threshold):
                 all_matches.append((score, mapping))
 
     all_matches.sort(key=lambda x: x[0], reverse=True)
@@ -551,7 +548,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     n_pred = len(scored_pred_ids)
 
     #mapping
-    best_mapping   = find_best_mapping(nodes_t, nodes_p, check_sequence=args.check_sequence_always)
+    best_mapping   = find_best_mapping(nodes_t, nodes_p, check_sequence=args.check_sequence_always, threshold=args.threshold)
     pred_to_target = {b: a for a, b in best_mapping}
     target_to_pred = {a: b for a, b in best_mapping}
     #n_matched           = len(best_mapping)
@@ -837,6 +834,12 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                 ha="center", va="top", fontsize=8, color="#34495e",
                 zorder=6, style="italic")
 
+        if nodes_p[nid].get("pseudoknot", False):
+            ax.text(x, y - label_offset - V_SPACING * 0.1,
+                    "Pseudoknot",
+                    ha="center", va="top", fontsize=8, color="#34495e",
+                    zorder=6, style="italic")
+
     # colorbar
     fig.subplots_adjust(left=0.01, right=0.87, top=0.93, bottom=0.04)
     cbar_ax = fig.add_axes([0.89, 0.20, 0.015, 0.55])
@@ -909,6 +912,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
             "bear_pred":      info["bear_p"],
             "penalty":        round(info["penalty"], 4),
             "matched":        info["matched"],
+            "pseudoknot":     nodes_p[nid].get("pseudoknot", False),
         }
         if info["matched"]:
             tid = info["target_id"]
