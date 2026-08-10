@@ -24,12 +24,13 @@ pycircstat2==0.1.15
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 requests==2.34.2
-RNApolis==0.16.13
-scikit-learn==1.9.0
+-e git+https://github.com/tzok/rnapolis-py@7ee148e0afc0ae4b1892a062a0d683ac9ab798e0#egg=RNApolisscikit-learn==1.9.0
 scipy==1.18.0
+setuptools==83.0.0
 shapely==2.1.2
 six==1.17.0
 threadpoolctl==3.6.0
 tqdm==4.69.0
 urllib3==2.7.0
 ViennaRNA==2.7.2
+wheel==0.47.0
