@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 RNAPOLIS_URL="https://github.com/tzok/rnapolis-py"
 RNAPOLIS_DIR="$SCRIPT_DIR/rnapolis-py"
+
+FR3D_URL="https://github.com/BGSU-RNA/fr3d-python"
+FR3D_DIR="$SCRIPT_DIR/fr3d-python"
+FR3D_BRANCH="latest"   # switch to "latest" once colleagues confirm it's stable
 
 if command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -35,25 +39,29 @@ if [ -d "$RNAPOLIS_DIR/.git" ]; then
 else
   git clone "$RNAPOLIS_URL" "$RNAPOLIS_DIR"
 fi
-
 "$VENV_PY" -m pip install -e "$RNAPOLIS_DIR"
+
+if [ -d "$FR3D_DIR/.git" ]; then
+  git -C "$FR3D_DIR" fetch origin
+  git -C "$FR3D_DIR" checkout "$FR3D_BRANCH"
+  git -C "$FR3D_DIR" pull --ff-only origin "$FR3D_BRANCH"
+else
+  git clone --branch "$FR3D_BRANCH" "$FR3D_URL" "$FR3D_DIR"
+fi
+"$VENV_PY" -m pip install -e "$FR3D_DIR"
 
 SCRIPT_DIR="$SCRIPT_DIR" "$VENV_PY" - <<'PY'
 import os
 import re
 from pathlib import Path
-
 strus_path = Path(os.environ["SCRIPT_DIR"]) / "StruS.py"
 text = strus_path.read_text(encoding="utf-8")
 expected = 'ANNOTATOR = str(SCRIPT_DIR / "rnapolis-py" / "src" / "rnapolis" / "annotator.py")'
-
 if expected not in text:
   text = re.sub(r'ANNOTATOR\s*=\s*".*?"', expected, text)
   strus_path.write_text(text, encoding="utf-8")
 PY
-
 chmod +x "$SCRIPT_DIR/StruS" || true
-
 echo
 echo "Installation finished."
 echo "Use: $SCRIPT_DIR/StruS RTBS target.pdb prediction.pdb"
