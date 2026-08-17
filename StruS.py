@@ -180,13 +180,13 @@ def main():
 
     if args.tool is None:
         if not mbr_path.is_file():
-                raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
+            raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
         execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
         if not mbr_path.is_file():
-                raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
+            raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
         execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
 
     elif args.tool == "structRMSD":
