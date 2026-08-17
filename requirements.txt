@@ -11,6 +11,7 @@ joblib==1.5.3
 kiwisolver==1.5.0
 matplotlib==3.11.1
 mmcif==1.1.1
+mmcif-pdbx==2.1.0
 msgpack==1.2.1
 narwhals==2.24.0
 numpy==2.5.1
@@ -24,7 +25,8 @@ pycircstat2==0.1.15
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 requests==2.34.2
--e git+https://github.com/tzok/rnapolis-py@7ee148e0afc0ae4b1892a062a0d683ac9ab798e0#egg=RNApolisscikit-learn==1.9.0
+-e git+https://github.com/tzok/rnapolis-py@7ee148e0afc0ae4b1892a062a0d683ac9ab798e0#egg=RNApolis
+scikit-learn==1.9.0
 scipy==1.18.0
 setuptools==83.0.0
 shapely==2.1.2

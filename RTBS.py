@@ -75,6 +75,10 @@ parser.add_argument("-o", "--output", default=None,
     help="Output path: image file for single prediction, folder for -p mode")
 parser.add_argument("--show", action="store_true",
     help="Display each plot interactively")
+parser.add_argument("--check_sequence_always", action="store_true",
+    help="Require sequence compatibility when matching subtrees, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence.")
+parser.add_argument("-t", "--threshold", default=2,
+    help="Number of matching nodes in the subtree to match the prediction and target fragments.")
 args = parser.parse_args()
 
 #Validate argument combinations
@@ -85,40 +89,83 @@ if args.pred_dir is not None and args.prediction is not None:
 
 #BEAR alphabet
 BEAR_ALPHABET = {
-    "stem":               list("abcdefghi="),
-    "stem_branch":        list("ABCDEFGHIJ"),
-    "hairpin":            list("jklmnopqrstuvwxyz^"),
-    "loop":               list("jklmnopqrstuvwxyz^"),
-    "internalloop_left":  ['!', '"', '#', '$', '%', '&', "'", '(', ')', '+'],
-    "internalloop_right": ['2','3','4','5','6','7','8','9','0','>'],
-    "bulge":              ['['],
-    "singlestrand":       [':'],
+    "LOOP":                  list("jklmnopqrstuvwxyz^"),
+    "STEM":                  list("abcdefghi="),
+    "STEM_branch":           list("ABCDEFGHIJ"),
+
+    "LEFTINTERNALLOOP":      ['?', '!', '"', '#', '$', '%', '&', "'", '(', ')', '+'],
+    "LEFTINTERNALLOOP_branch": ['?', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W'],
+
+    "BULGELEFT":             ['['],
+    "BULGELEFTBRANCH":       ['{'],
+
+    "RIGHTINTERNALLOOP":     ['?', '2', '3', '4', '5', '6', '7', '8', '9', '0', '>'],
+    "RIGHTINTERNALLOOP_branch": ['?', 'Y', 'Z', '~', '?', '_', '|', '/', '\\', '@'],
+
+    "BULGERIGHT":            [']'],
+    "BULGERIGHTBRANCH":      ['}'],
+
+    "Unclassified":          [':'],
 }
 
-def name_to_bear_chars(name: str) -> list:
-    n = re.sub(r'\s*\d+$', '', name).strip().lower()
-    if n.startswith("stem"):    return BEAR_ALPHABET["stem"]
-    if n.startswith("hairpin"): return BEAR_ALPHABET["hairpin"]
-    if n.startswith("loop"):    return BEAR_ALPHABET["loop"]
-    if n.startswith("single"):  return BEAR_ALPHABET["singlestrand"]
-    if n.startswith("bulge"):   return ['[', ']']
-    if n.startswith("internal"):return BEAR_ALPHABET["internalloop_left"]
-    return [':']
+def bear_type_to_alphabet(node: dict) -> list:
+    bear_type = node.get("bear_type", "Unclassified")
+    branching = node.get("branching", False)
+    if bear_type == "Stem":
+        bear_type = "STEM"
 
-def get_structural_length(node: dict, name: str) -> int:
+    match bear_type:
+        case "STEM":
+            return BEAR_ALPHABET["STEM"]
+        case "STEM_branch":
+            return BEAR_ALPHABET["STEM_branch"]
+        case "LOOP":
+            return BEAR_ALPHABET["LOOP"]
+        case "LEFTINTERNALLOOP":
+            return (
+                BEAR_ALPHABET["LEFTINTERNALLOOP_branch"]
+                if branching
+                else BEAR_ALPHABET["LEFTINTERNALLOOP"]
+            )
+        case "RIGHTINTERNALLOOP":
+            return (
+                BEAR_ALPHABET["RIGHTINTERNALLOOP_branch"]
+                if branching
+                else BEAR_ALPHABET["RIGHTINTERNALLOOP"]
+            )
+        case "BULGELEFT":
+            return (
+                BEAR_ALPHABET["BULGELEFTBRANCH"]
+                if branching
+                else BEAR_ALPHABET["BULGELEFT"]
+            )
+        case "BULGERIGHT":
+            return (
+                BEAR_ALPHABET["BULGERIGHTBRANCH"]
+                if branching
+                else BEAR_ALPHABET["BULGERIGHT"]
+            )
+        case _:
+            return BEAR_ALPHABET["Unclassified"]
+
+def is_scored_node(node: dict) -> bool:
+    return node.get("bear_type") != "Junction"
+
+def get_structural_length(node: dict) -> int:
     strands = node.get("strands", [])
-    n = re.sub(r'\s*\d+$', '', name).strip().lower()
     if not strands:
         return 1
-    if n.startswith("stem"):
+    bear_type = node.get("bear_type", "")
+    if bear_type in ("STEM", "STEM_branch"):
         return max(strands[0].get("last", 0) - strands[0].get("first", 0) + 1, 1)
     total = sum(s.get("last", 0) - s.get("first", 0) + 1 for s in strands)
     return max(total, 1)
 
 def node_to_bear(node: dict) -> str:
-    name  = node.get("name", "")
-    chars = name_to_bear_chars(name)
-    length = get_structural_length(node, name)
+    if not is_scored_node(node):
+        return None
+    chars = bear_type_to_alphabet(node)
+    length = get_structural_length(node)
     idx = max(0, min(length - 1, len(chars) - 1))
     return chars[idx]
 
@@ -175,7 +222,8 @@ def mbr_penalty(node_target: dict, node_pred: dict) -> tuple:
     elif bp in MBR and bt in MBR[bp]:
         score = MBR[bp][bt]
     else:
-        score = MIN_MBR_SCORE
+        #HAIRPIN LENGTH 1 AND 2, MAYBE SOMETHING MORE
+        score = 0.0
     return -score, bt, bp
 
 # Load / cycle-break helpers
@@ -277,34 +325,48 @@ def break_cycles(root, nodes):
     return clean, removed_edges
 
 #Local subtree matching with additional checking of the remaining nodes
-def normalize_name(name: str) -> str:
-    return re.sub(r'\s*\d+$', '', name).strip().lower()
 
-
-#Nodes are considered compatible if the nucleotide range of one is within the range of the other.
-def nucleotide_range_match(node_a, node_b):
+def sequence_coverage(node_a, node_b):
     strands_a = node_a.get("strands", [])
     strands_b = node_b.get("strands", [])
     if not strands_a or not strands_b:
-        return False
-    ranges_a = [
-        (s.get("first"), s.get("last"))
+        return 0.0
+    
+    sequences_a = [
+        s.get("sequence", "").upper()
         for s in strands_a
-        if s.get("first") is not None and s.get("last") is not None
+        if s.get("sequence")
     ]
-    ranges_b = [
-        (s.get("first"), s.get("last"))
+    sequences_b = [
+        s.get("sequence", "").upper()
         for s in strands_b
-        if s.get("first") is not None and s.get("last") is not None
+        if s.get("sequence")
     ]
-    for a1, a2 in ranges_a:
-        for b1, b2 in ranges_b:
-            if ((a1 <= b1 and a2 >= b2) or (b1 <= a1 and b2 >= a2)):
-                return True
-    return False
+    if not sequences_a or not sequences_b:
+        return 0.0
+    
+    best_coverage = 0.0
+    for seq_a in sequences_a:
+        for seq_b in sequences_b:
+            if not seq_a or not seq_b:
+                continue
+            if seq_a in seq_b:
+                coverage = len(seq_a) / len(seq_b)
+            elif seq_b in seq_a:
+                coverage = len(seq_b) / len(seq_a)
+            else:
+                coverage = 0.0
+
+            best_coverage = max(best_coverage, coverage)
+
+    return best_coverage
 
 
-def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
+def sequence_match(node_a, node_b):
+    return sequence_coverage(node_a, node_b) > 0.0
+
+
+def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None, check_sequence=False):
     if memo is None:
         memo = {}
     if visiting is None:
@@ -316,8 +378,12 @@ def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
         return 0, []
     na = nodes_a[root_a]
     nb = nodes_b[root_b]
-    if normalize_name(na["name"]) != normalize_name(nb["name"]):
+
+    if na.get("bear_type") != nb.get("bear_type"):
         return 0, []
+    if check_sequence and not sequence_match(na, nb):
+        return 0, []
+    
     visiting.add(state)
     mapping = [(root_a, root_b)]
     score = 1
@@ -328,7 +394,7 @@ def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
         candidates = []
         for ca in children_a:
             for cb in children_b:
-                sc, mp = match_subtree(nodes_a, ca, nodes_b, cb, memo, visiting)
+                sc, mp = match_subtree(nodes_a, ca, nodes_b, cb, memo, visiting, check_sequence=check_sequence)
                 if sc > 0:
                     candidates.append((sc, mp, ca, cb))
         candidates.sort(key=lambda x: x[0], reverse=True)
@@ -357,13 +423,45 @@ def match_subtree(nodes_a, root_a, nodes_b, root_b, memo=None, visiting=None):
     return result
 
 
-def find_best_mapping(nodes_t, nodes_p):
+def match_remaining_by_sequence(nodes_t, nodes_p, remaining_t, remaining_p):
+    candidates = []
+
+    for nt in remaining_t:
+        for np in remaining_p:
+            if nodes_t[nt].get("bear_type") != nodes_p[np].get("bear_type"):
+                continue
+
+            coverage = sequence_coverage(nodes_t[nt], nodes_p[np])
+
+            if coverage <= 0.0:
+                continue
+
+            candidates.append((coverage, nt, np))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    mapping = []
+    used_t = set()
+    used_p = set()
+
+    for coverage, nt, np in candidates:
+        if nt in used_t or np in used_p:
+            continue
+
+        mapping.append((nt, np))
+        used_t.add(nt)
+        used_p.add(np)
+
+    return mapping
+
+
+def find_best_mapping(nodes_t, nodes_p, check_sequence=False, threshold=2):
     memo = {}
     all_matches = []
     for nid_t in nodes_t:
         for nid_p in nodes_p:
-            score, mapping = match_subtree(nodes_t, nid_t, nodes_p, nid_p, memo)
-            if score >= 2:
+            score, mapping = match_subtree(nodes_t, nid_t, nodes_p, nid_p, memo, check_sequence=check_sequence)
+            if score >= int(threshold):
                 all_matches.append((score, mapping))
 
     all_matches.sort(key=lambda x: x[0], reverse=True)
@@ -381,17 +479,9 @@ def find_best_mapping(nodes_t, nodes_p):
 
     remaining_t = [nid for nid in nodes_t if nid not in used_t]
     remaining_p = [nid for nid in nodes_p if nid not in used_p]
-    for nt in remaining_t:
-        for np in remaining_p:
-            if np in used_p:
-                continue
-            if normalize_name(nodes_t[nt]["name"]) != normalize_name(nodes_p[np]["name"]):
-                continue
-            if nucleotide_range_match(nodes_t[nt], nodes_p[np]):
-                best_mapping.append((nt, np))
-                used_t.add(nt)
-                used_p.add(np)
-                break
+
+    remaining_mapping = match_remaining_by_sequence(nodes_t, nodes_p, remaining_t, remaining_p)
+    best_mapping.extend(remaining_mapping)
 
     return best_mapping
 
@@ -410,11 +500,16 @@ if target_removed_edges:
     print(f"WARNING: target had cyclic edges; {len(target_removed_edges)} back-edge(s) removed.")
 
 target_name = pathlib.Path(args.target).stem
-n_target    = len(nodes_t)
+n_target_all    = len(nodes_t)
+scored_target_ids = [
+    nid for nid, node in nodes_t.items()
+    if is_scored_node(node)
+]
+n_target = len(scored_target_ids)
 
 # best_possible: computed once over target nodes, shared by all predictions
 best_possible = 0.0
-for nid_t in nodes_t:
+for nid_t in scored_target_ids:
     bt   = node_to_bear(nodes_t[nid_t])
     diag = MBR.get(bt, {}).get(bt, None)
     best_possible += (-diag if diag is not None else -MAX_MBR_SCORE)
@@ -445,41 +540,102 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         )
 
     pred_name = pred_path.stem
-    n_pred = len(nodes_p)
+    n_pred_all = len(nodes_p)
+    scored_pred_ids = [
+        nid for nid, node in nodes_p.items()
+        if is_scored_node(node)
+    ]
+    n_pred = len(scored_pred_ids)
 
     #mapping
-    best_mapping   = find_best_mapping(nodes_t, nodes_p)
+    best_mapping   = find_best_mapping(nodes_t, nodes_p, check_sequence=args.check_sequence_always, threshold=args.threshold)
     pred_to_target = {b: a for a, b in best_mapping}
     target_to_pred = {a: b for a, b in best_mapping}
-    n_matched           = len(best_mapping)
-    n_unmatched_pred    = n_pred   - n_matched
-    n_unmatched_target  = n_target - n_matched
+    #n_matched           = len(best_mapping)
+    n_matched_total = len(best_mapping)
+    n_matched_scored = sum(1 for tid, pid in best_mapping
+        if is_scored_node(nodes_t[tid]) and is_scored_node(nodes_p[pid]))
+    #n_unmatched_pred    = n_pred   - n_matched
+    #n_unmatched_target  = n_target - n_matched
+    #n_unmatched_pred = sum(1 for nid in scored_pred_ids if nid not in pred_to_target)
+    #n_unmatched_target = sum(1 for nid in scored_target_ids if nid not in target_to_pred)
+
+    unmatched_pred_scored_ids = [nid for nid in scored_pred_ids if nid not in pred_to_target]
+    unmatched_target_scored_ids = [nid for nid in scored_target_ids if nid not in target_to_pred]
+    unmatched_pred_junction_ids = [nid for nid, node in nodes_p.items() if not is_scored_node(node) and nid not in pred_to_target]
+    unmatched_target_junction_ids = [nid for nid, node in nodes_t.items() if not is_scored_node(node) and nid not in target_to_pred]
+    n_unmatched_pred = len(unmatched_pred_scored_ids)
+    n_unmatched_target = len(unmatched_target_scored_ids)
+
+    n_unmatched_pred_junction = len(unmatched_pred_junction_ids)
+    n_unmatched_target_junction = len(unmatched_target_junction_ids)
 
     #penalties per prediction node
     node_info = {}
+
     for nid_p in nodes_p:
         if nid_p in pred_to_target:
             nid_t = pred_to_target[nid_p]
-            pen, bt, bp = mbr_penalty(nodes_t[nid_t], nodes_p[nid_p])
-            node_info[nid_p] = {"penalty": pen, "bear_t": bt, "bear_p": bp,
-                                 "matched": True, "target_id": nid_t}
-        else:
-            bp = node_to_bear(nodes_p[nid_p])
-            node_info[nid_p] = {"penalty": UNMATCHED_PENALTY, "bear_t": "—",
-                                 "bear_p": bp, "matched": False}
 
-    unmatched_target_ids = [nid for nid in nodes_t if nid not in target_to_pred]
+            if not is_scored_node(nodes_p[nid_p]):
+                node_info[nid_p] = {
+                    "penalty": 0.0,
+                    "bear_t": None,
+                    "bear_p": None,
+                    "matched": True,
+                    "scored": False,
+                    "target_id": nid_t,
+                }
+            else:
+                pen, bt, bp = mbr_penalty(
+                    nodes_t[nid_t],
+                    nodes_p[nid_p]
+                )
+
+                node_info[nid_p] = {
+                    "penalty": pen,
+                    "bear_t": bt,
+                    "bear_p": bp,
+                    "matched": True,
+                    "scored": True,
+                    "target_id": nid_t,
+                }
+
+        else:
+            if not is_scored_node(nodes_p[nid_p]):
+                node_info[nid_p] = {
+                    "penalty": 0.0,
+                    "bear_t": None,
+                    "bear_p": None,
+                    "matched": False,
+                    "scored": False,
+                }
+            else:
+                bp = node_to_bear(nodes_p[nid_p])
+
+                node_info[nid_p] = {
+                    "penalty": UNMATCHED_PENALTY,
+                    "bear_t": None,
+                    "bear_p": bp,
+                    "matched": False,
+                    "scored": True,
+                }
+
+    #unmatched_target_ids = [nid for nid in nodes_t if nid not in target_to_pred]
+    unmatched_target_ids = [nid for nid in scored_target_ids if nid not in target_to_pred]
 
     # total penalty: MBR costs for matched pairs
     #              + UNMATCHED_PENALTY for every unmatched prediction node
     #              + UNMATCHED_PENALTY for every unmatched target node
     pred_matched_penalty = sum(
-        info["penalty"] for info in node_info.values() if info["matched"]
+        info["penalty"]
+        for info in node_info.values()
+        if info["matched"] and info["scored"]
     )
     total_pen = (pred_matched_penalty
                  + n_unmatched_pred   * UNMATCHED_PENALTY
                  + n_unmatched_target * UNMATCHED_PENALTY)
-    avg_pen = total_pen / (n_pred + n_target - n_matched)
+    avg_pen = total_pen / (n_pred + n_target - n_matched_scored)
 
     # Separate total for target-anchored metric - excludes unmatched prediction
     # nodes so that predictions of different sizes are directly comparable.
@@ -597,6 +753,22 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     def penalty_color(p):
         return cmap(norm(np.clip(p, safe_vmin, safe_vmax)))
 
+    def node_sequence_label(node):
+        strands = node.get("strands", [])
+        lines = []
+
+        for strand in strands:
+            first = strand.get("first")
+            last = strand.get("last")
+            sequence = strand.get("sequence", "")
+
+            if first is not None and last is not None:
+                lines.append(f"{first}-{last}: {sequence}")
+            elif sequence:
+                lines.append(sequence)
+
+        return "\n".join(lines)
+
     #draw
     xs = [x for x, y in pos_p.values()]
     ys = [y for x, y in pos_p.values()]
@@ -621,21 +793,38 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                 ax.plot([x, cx], [y, cy], color="#95a5a6", lw=1.2, zorder=1, alpha=0.7)
 
     # nodes
-    label_offset = V_SPACING * 0.1
+    label_offset = V_SPACING * 0.2
     for nid, (x, y) in pos_p.items():
         info = node_info[nid]
         pen  = info["penalty"]
         col  = penalty_color(pen)
+        if info["scored"]:
+            col = penalty_color(pen)
+        else:
+            if info["matched"]:
+                col = "#7cc7f0"
+            else:
+                
+                col = "#845183"
         name = nodes_p[nid]["name"]
+        sequence_label = node_sequence_label(nodes_p[nid])
         bt   = info["bear_t"]
         bp   = info["bear_p"]
+        node_label = f"{name}\n{sequence_label}" if sequence_label else name
 
-        ax.text(x, y, name, ha="center", va="center", fontsize=8,
+        ax.text(x, y, node_label, ha="center", va="center", fontsize=8,
                 fontweight="bold", zorder=5,
                 bbox=dict(facecolor=col, edgecolor="#2c3e50",
                           boxstyle="round,pad=0.4", alpha=0.93, linewidth=1.1))
 
-        if info["matched"]:
+        if not info["scored"]:
+            if info["matched"]:
+                tname = nodes_t[info["target_id"]]["name"]
+                lbl = f"JUNCTION  ({tname})"
+            else:
+                lbl = "JUNCTION  UNMATCHED"
+
+        elif info["matched"]:
             tname = nodes_t[info["target_id"]]["name"]
             lbl = f"pen={pen:+.2f}  BEAR: {bt}→{bp}  ({tname})"
         else:
@@ -644,6 +833,12 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         ax.text(x, y - label_offset, lbl,
                 ha="center", va="top", fontsize=8, color="#34495e",
                 zorder=6, style="italic")
+
+        if nodes_p[nid].get("pseudoknot", False):
+            ax.text(x, y - label_offset - V_SPACING * 0.1,
+                    "Pseudoknot",
+                    ha="center", va="top", fontsize=8, color="#34495e",
+                    zorder=6, style="italic")
 
     # colorbar
     fig.subplots_adjust(left=0.01, right=0.87, top=0.93, bottom=0.04)
@@ -664,29 +859,31 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
 
     # info box
     info_txt = (
-        f"Target:     {target_name}  ({n_target} nodes)\n"
-        f"Prediction: {pred_name}  ({n_pred} nodes)\n"
-        f"  Unmatched pred:   {n_unmatched_pred}\n"
-        f"  Unmatched target: {n_unmatched_target}\n"
+        f"Target:     {target_name}  ({n_target_all} nodes, {n_target} scored)\n"
+        f"Prediction: {pred_name}  ({n_pred_all} nodes, {n_pred} scored)\n"
+        f"  Unmatched pred scored:   {n_unmatched_pred}\n"
+        f"  Unmatched target scored: {n_unmatched_target}\n"
+        f"  Unmatched pred junction:   {n_unmatched_pred_junction}\n"
+        f"  Unmatched target junction: {n_unmatched_target_junction}\n"
         f"Sum penalty (sym):  {total_pen:+.2f}  (avg/node: {avg_pen:+.2f})\n"
         f"Sum penalty (tgt):  {total_pen_target:+.2f}  (avg/node: {avg_pen_target:+.2f})\n"
         f"RTBS (sym): {norm_penalty:.4f}  (1=best, 0=worst)\n"
-        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)\n"
+        f"RTBS (tgt): {norm_penalty_target:.4f}  (1=best, 0=worst)"
     )
     if target_was_cyclic:
         info_txt += (
-            f"\nWARNING: target had cyclic edges; "
-            f"{len(target_removed_edges)} back-edge(s) removed. Details in .json file."
+            f"\n\nWARNING: target had cyclic edges;\n"
+            f"{len(target_removed_edges)} back-edge(s) removed.\nDetails in .json file."
         )
     if was_cyclic:
         info_txt += (
-            f"\nWARNING: prediction had cyclic edges; "
-            f"{len(removed_edges)} back-edge(s) removed. Details in .json file."
+            f"\n\nWARNING: prediction had cyclic edges;\n"
+            f"{len(removed_edges)} back-edge(s) removed.\nDetails in .json file."
         )
 
     if n_disconnected > 0:
         info_txt += (
-            f"\nWARNING: prediction had disconnected components; "
+            f"\n\nWARNING: prediction had disconnected components;\n"
             f"{n_disconnected} disconnected component(s) found."
         )
         
@@ -715,6 +912,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
             "bear_pred":      info["bear_p"],
             "penalty":        round(info["penalty"], 4),
             "matched":        info["matched"],
+            "pseudoknot":     nodes_p[nid].get("pseudoknot", False),
         }
         if info["matched"]:
             tid = info["target_id"]
@@ -724,24 +922,39 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         report_pred.append(entry)
     report_pred.sort(key=lambda x: -x["penalty"])
 
+    report_pred_unmatched = [
+        {
+            "pred_node_id": nid,
+            "pred_node_name": nodes_p[nid]["name"],
+            "bear_pred": node_to_bear(nodes_p[nid]),
+            "penalty": round(UNMATCHED_PENALTY, 4),
+            "matched": False,
+        }
+        for nid in unmatched_pred_scored_ids
+    ]
     report_target_unmatched = [
         {"target_node_id":   nid,
          "target_node_name": nodes_t[nid]["name"],
          "bear_target":      node_to_bear(nodes_t[nid]),
          "penalty":          round(UNMATCHED_PENALTY, 4),
          "matched":          False}
-        for nid in unmatched_target_ids
+        for nid in unmatched_target_scored_ids
     ]
+
     was_disconnected = False
     if n_disconnected >0:
         was_disconnected = True
     summary = {
         "target":                    target_name,
         "prediction":                pred_name,
-        "n_target_nodes":            n_target,
-        "n_pred_nodes":              n_pred,
-        "n_unmatched_pred":          n_unmatched_pred,
-        "n_unmatched_target":        n_unmatched_target,
+        "n_target_nodes":            n_target_all,
+        "n_pred_nodes":              n_pred_all,
+        "n_target_scored_nodes":            n_target,
+        "n_pred_scored_nodes":              n_pred,
+        "n_unmatched_scored_pred":          n_unmatched_pred,
+        "n_unmatched_scored_target":        n_unmatched_target,
+        "n_unmatched_pred_junction": n_unmatched_pred_junction,
+        "n_unmatched_target_junction": n_unmatched_target_junction,
         "sum_penalty_sym":            round(total_pen, 4),
         "sum_penalty_target":         round(total_pen_target, 4),
         "avg_penalty_sym":            round(avg_pen, 4),
@@ -758,6 +971,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         "n_disconnected":            n_disconnected,
         "prediction_nodes":          report_pred,
         "unmatched_target_nodes":    report_target_unmatched,
+        "unmatched_prediction_nodes":    report_pred_unmatched,
     }
 
     rpath = out_path.with_suffix(".json")
