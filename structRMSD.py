@@ -6,12 +6,17 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import re
+import string
 import urllib.request
 from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from Bio.PDB import PDBIO, PDBParser, Select, Superimposer
+from Bio.PDB.Structure import Structure as PDBStructure
+from Bio.PDB.Model import Model as PDBModel
+from Bio.PDB.Chain import Chain as PDBChain
 from rnapolis.common import BpSeq, DotBracket
 from config import ANNOTATOR, PYTHON_BIN
 
@@ -54,7 +59,10 @@ def parse_args():
     parser.add_argument("--bpseq", type=Path, default=None)
     parser.add_argument("--annotator", action="store_true")
     parser.add_argument("--fr3d", action="store_true")
+    parser.add_argument("--remove-isolated", action="store_true")
+    parser.add_argument("--chain-mapping", type=str, default=None)
     parser.add_argument("--tm-threshold", type=float, default=0.45)
+    parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
@@ -276,6 +284,62 @@ def restrict_to_target_chain(
     return filtered
 
 
+def parse_chain_segment(segment: str) -> tuple[str, int, int]:
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)-(\d+)", segment)
+    if not match:
+        raise ValueError(f"Cannot parse chain segment: {segment!r}")
+    chain_id, first, last = match.groups()
+    return chain_id, int(first), int(last)
+
+
+def parse_chain_mapping(spec: str) -> dict[str, list[list[tuple[str, int, int]]]]:
+    mapping = {}
+    for block in spec.split(";;"):
+        block = block.strip()
+        if not block:
+            continue
+        file_id, chains_part = block.split(":", 1)
+        logical_chains = []
+        for chain_spec in chains_part.split(";"):
+            segments = [parse_chain_segment(s) for s in chain_spec.split("+")]
+            logical_chains.append(segments)
+        mapping[file_id] = logical_chains
+    return mapping
+
+
+def apply_chain_mapping(
+    pdb_path: Path, logical_chains: list[list[tuple[str, int, int]]], out_path: Path
+) -> Path:
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure(pdb_path.stem, str(pdb_path))
+    old_model = next(iter(structure))
+
+    new_structure = PDBStructure(pdb_path.stem)
+    new_model = PDBModel(0)
+    new_structure.add(new_model)
+
+    new_chain_ids = string.ascii_uppercase
+
+    for i, segments in enumerate(logical_chains):
+        new_chain = PDBChain(new_chain_ids[i])
+        new_model.add(new_chain)
+        for old_chain_id, first, last in segments:
+            old_chain = old_model[old_chain_id]
+            for res_num in range(first, last + 1):
+                if res_num not in old_chain:
+                    continue
+                residue = old_chain[res_num]
+                if residue.id[0] != " ":
+                    continue
+                residue.detach_parent()
+                new_chain.add(residue)
+
+    io = PDBIO()
+    io.set_structure(new_structure)
+    io.save(str(out_path))
+    return out_path
+
+
 def run_fr3d(target_pdb: Path) -> Path:
     target_dir = target_pdb.parent if target_pdb.parent != Path("") else Path(".")
     stem = target_pdb.stem
@@ -376,6 +440,11 @@ def build_bpseq_from_fr3d(
 
     return out_path
 
+def build_bpseq_from_annotator(raw_data: dict, out_path: Path) -> Path:
+    with open(out_path, "w") as f:
+        for entry in raw_data["bpseq"]["entries"]:
+            f.write(f"{entry['index_']} {entry['sequence']} {entry['pair']}\n")
+    return out_path
 
 def get_motif_tree(
     target_pdb: Path,
@@ -385,8 +454,11 @@ def get_motif_tree(
     use_annotator: bool = False,
     use_fr3d: bool = False,
     target_chain: str | None = None,
+    remove_isolated: bool = False,
 ) -> list[dict]:
     if motif_tree_path is not None:
+        if remove_isolated:
+            print("--remove-isolated has no effect with --motif-tree (already-computed motifs can't be recomputed)")
         with open(motif_tree_path) as f:
             return json.load(f)
 
@@ -396,6 +468,8 @@ def get_motif_tree(
         print(chain_ranges)
 
         bpseq = BpSeq.from_dotbracket(DotBracket.from_file(str(dbn_path)))
+        if remove_isolated:
+            bpseq = bpseq.without_isolated()
         elements = load_elements_from_bpseq(bpseq)
 
         if target_chain is not None:
@@ -404,6 +478,8 @@ def get_motif_tree(
         if target_chain is not None:
             print(f"--target-chain {target_chain!r} has no effect with --bpseq")
         bpseq = BpSeq.from_file(str(bpseq_path))
+        if remove_isolated:
+                    bpseq = bpseq.without_isolated()
         elements = load_elements_from_bpseq(bpseq)
     elif use_annotator:
         raw_json_path = Path(target_pdb).with_suffix(".annotator.json")
@@ -412,7 +488,13 @@ def get_motif_tree(
         with open(raw_json_path) as f:
             raw_data = json.load(f)
 
-        elements = load_elements(raw_data)
+        annotator_bpseq_path = Path(target_pdb).with_suffix(".annotator.bpseq")
+        build_bpseq_from_annotator(raw_data, annotator_bpseq_path)
+
+        bpseq = BpSeq.from_file(str(annotator_bpseq_path))
+        if remove_isolated:
+            bpseq = bpseq.without_isolated()
+        elements = load_elements_from_bpseq(bpseq)
     elif use_fr3d:
         basepairs_path = run_fr3d(target_pdb)
         raw_pairs = parse_fr3d_basepairs(basepairs_path)
@@ -424,6 +506,8 @@ def get_motif_tree(
         print(f"Built BPSEQ from FR3D output: {fr3d_bpseq_path}")
 
         bpseq = BpSeq.from_file(str(fr3d_bpseq_path))
+        if remove_isolated:
+                    bpseq = bpseq.without_isolated()
         elements = load_elements_from_bpseq(bpseq)
     else:
         raise ValueError("get_motif_tree: no motif source given")
@@ -542,6 +626,8 @@ def load_structure(pdb_path: Path):
     global_index = 1
     for chain in model:
         for residue in chain:
+            if residue.id[0] != " ":
+                continue    
             index_to_residue[global_index] = residue
             global_index += 1
 
@@ -552,6 +638,21 @@ def list_prediction_files(predictions_arg: Path) -> list[Path]:
     if predictions_arg.is_dir():
         return sorted(predictions_arg.glob("*.pdb"))
     return [predictions_arg]
+
+
+def remap_prediction_paths(
+    prediction_paths: list[Path], chain_mapping: dict
+) -> list[Path]:
+    remapped = []
+    for path in prediction_paths:
+        if path.name in chain_mapping:
+            new_path = apply_chain_mapping(
+                path, chain_mapping[path.name], path.with_suffix(".remapped.pdb")
+            )
+            remapped.append(new_path)
+        else:
+            remapped.append(path)
+    return remapped
 
 
 def find_usalign_binary(usalign_bin: str | None) -> str:
@@ -726,6 +827,7 @@ def process_target(
     motif_tree: list[dict],
     passing_predictions: list[tuple[Path, float]],
     usalign_bin: str,
+    min_coverage: float = 0.9,
 ) -> list[dict]:
 
     target_model, target_index = load_structure(target_pdb)
@@ -755,7 +857,7 @@ def process_target(
                     )
                     continue
 
-            motif_rmsd = compute_motif_rmsd(target_index, prediction_index, motif)
+            motif_rmsd = compute_motif_rmsd(target_index, prediction_index, motif, min_coverage)
             motif_tm_score = compute_motif_tm_score(
                 target_model, target_index, prediction_model, prediction_index,
                 motif, usalign_bin
@@ -801,16 +903,24 @@ def aggregate_stats(records: list[dict]) -> list[dict]:
 
     return summary
 
+def to_na(value):
+    return "n/a" if value is None else value
 
 def write_per_motif_csv(records: list[dict], out_path: Path):
     fieldnames = [
         "motif_id", "motif_type", "residue_range",
         "prediction_file", "motif_tm_score", "motif_rmsd",
     ]
+
+    rows = [
+        {key: to_na(value) for key, value in record.items()}
+         for record in records
+    ]
+
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows(rows)
 
 
 def write_summary_csv(summary: list[dict], out_path: Path):
@@ -818,10 +928,16 @@ def write_summary_csv(summary: list[dict], out_path: Path):
         "motif_id", "motif_type", "residue_range",
         "n_predictions", "mean_rmsd", "std_rmsd",
     ]
+
+    rows = [
+        {key: to_na(value) for key, value in row.items()}
+         for row in summary
+    ]
+
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(summary)
+        writer.writerows(rows)
 
 
 def main():
@@ -830,17 +946,28 @@ def main():
     prediction = args.prediction if args.prediction else args.pred_dir
     prediction_paths = list_prediction_files(prediction)
 
-    target_pdb, target_chain = resolve_target_pdb(
-        args.target,
-        getattr(args, "target_chain", None),
-        prediction_paths,
-        use_bpseq=args.bpseq is not None,
-        use_motif_tree=args.motif_tree is not None,
-    )
+    chain_mapping = None
+    if getattr(args, "chain_mapping", None):
+        chain_mapping = parse_chain_mapping(args.chain_mapping)
+        prediction_paths = remap_prediction_paths(prediction_paths, chain_mapping)
+
+    if chain_mapping is not None and "t" in chain_mapping:
+        target_pdb = apply_chain_mapping(
+            args.target, chain_mapping["t"], args.target.with_suffix(".remapped.pdb")
+        )
+        target_chain = None
+    else:
+        target_pdb, target_chain = resolve_target_pdb(
+            args.target,
+            getattr(args, "target_chain", None),
+            prediction_paths,
+            use_bpseq=args.bpseq is not None,
+            use_motif_tree=args.motif_tree is not None,
+        )
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, target_chain,
+        args.annotator, args.fr3d, target_chain, getattr(args, "remove_isolated", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -853,7 +980,7 @@ def main():
         f"passed the TM-score threshold >= {args.tm_threshold}"
     )
 
-    records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin)
+    records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin, args.min_coverage)
     summary = aggregate_stats(records)
 
     write_per_motif_csv(records, args.out_per_motif)
@@ -868,17 +995,28 @@ def struct_rmsd_main(workdir, kwargs):
     prediction = Path(args.prediction) if args.prediction else Path(args.pred_dir)
     prediction_paths = list_prediction_files(prediction)
 
-    target_pdb, target_chain = resolve_target_pdb(
-        Path(args.target),
-        getattr(args, "target_chain", None),
-        prediction_paths,
-        use_bpseq=args.bpseq is not None,
-        use_motif_tree=args.motif_tree is not None,
-    )
+    chain_mapping = None
+    if getattr(args, "chain_mapping", None):
+        chain_mapping = parse_chain_mapping(args.chain_mapping)
+        prediction_paths = remap_prediction_paths(prediction_paths, chain_mapping)
+
+    if chain_mapping is not None and "t" in chain_mapping:
+        target_pdb = apply_chain_mapping(
+            Path(args.target), chain_mapping["t"], Path(args.target).with_suffix(".remapped.pdb")
+        )
+        target_chain = None
+    else:
+        target_pdb, target_chain = resolve_target_pdb(
+            Path(args.target),
+            getattr(args, "target_chain", None),
+            prediction_paths,
+            use_bpseq=args.bpseq is not None,
+            use_motif_tree=args.motif_tree is not None,
+        )
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, target_chain,
+        args.annotator, args.fr3d, target_chain, getattr(args, "remove_isolated", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -891,7 +1029,7 @@ def struct_rmsd_main(workdir, kwargs):
         f"passed the TM-score threshold >= {args.tm_threshold}"
     )
 
-    records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin)
+    records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin, getattr(args, "min_coverage", 0.9))
     summary = aggregate_stats(records)
 
     out_per_motif_path = os.path.join(workdir, args.out_per_motif)
