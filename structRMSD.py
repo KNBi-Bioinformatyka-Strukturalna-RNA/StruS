@@ -580,7 +580,10 @@ def load_structure(pdb_path: Path):
 
 def list_prediction_files(predictions_arg: Path) -> list[Path]:
     if predictions_arg.is_dir():
-        return sorted(predictions_arg.glob("*.pdb"))
+        return sorted(
+            p for p in predictions_arg.glob("*.pdb")
+            if ".remapped." not in p.name and ".chain" not in p.name
+        )
     return [predictions_arg]
 
 
