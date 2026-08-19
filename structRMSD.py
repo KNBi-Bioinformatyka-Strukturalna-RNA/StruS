@@ -76,77 +76,6 @@ def parse_args():
     return args
 
 
-def load_elements(data: dict) -> list[dict]:
-    elements = []
-    eid = 1
-
-    def add_element(name, strands):
-        nonlocal eid
-        elements.append({
-            "id": eid,
-            "name": name,
-            "strands": strands,
-        })
-        eid += 1
-
-    for i, s in enumerate(data.get("stems", []), 1):
-        add_element(
-            f"Stem {i}",
-            [
-                {
-                    "first": s["strand5p"]["first"],
-                    "last": s["strand5p"]["last"],
-                    "sequence": s["strand5p"]["sequence"],
-                    "structure": s["strand5p"]["structure"],
-                },
-                {
-                    "first": s["strand3p"]["first"],
-                    "last": s["strand3p"]["last"],
-                    "sequence": s["strand3p"]["sequence"],
-                    "structure": s["strand3p"]["structure"],
-                },
-            ],
-        )
-
-    for i, s in enumerate(data.get("single_strands", []), 1):
-        add_element(
-            f"SingleStrand {i}",
-            [{
-                "first": s["strand"]["first"],
-                "last": s["strand"]["last"],
-                "sequence": s["strand"]["sequence"],
-                "structure": s["strand"]["structure"],
-            }],
-        )
-
-    for i, h in enumerate(data.get("hairpins", []), 1):
-        add_element(
-            f"Hairpin {i}",
-            [{
-                "first": h["strand"]["first"],
-                "last": h["strand"]["last"],
-                "sequence": h["strand"]["sequence"],
-                "structure": h["strand"]["structure"],
-            }],
-        )
-
-    for i, h in enumerate(data.get("loops", []), 1):
-        add_element(
-            f"Loop {i}",
-            [
-                {
-                    "first": s["first"],
-                    "last": s["last"],
-                    "sequence": s["sequence"],
-                    "structure": s["structure"],
-                }
-                for s in h["strands"]
-            ],
-        )
-
-    return elements
-
-
 def load_elements_from_bpseq(bpseq: "BpSeq") -> list[dict]:
     elements = []
     eid = 1
@@ -348,6 +277,7 @@ def run_fr3d(target_pdb: Path) -> Path:
         PYTHON_BIN, "-m", "fr3d.classifiers.NA_pairwise_interactions",
         "-i", str(target_dir), "-o", str(target_dir), "-c", "basepair", stem,
     ]
+    print(f"Running FR3D on {target_pdb}...")
     run_command(cmd, quiet=False)
 
     basepairs_path = target_dir / f"{stem}_basepair.txt"
