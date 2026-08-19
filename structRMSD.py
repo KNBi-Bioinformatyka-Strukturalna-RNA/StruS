@@ -952,7 +952,7 @@ def struct_rmsd_main(workdir, kwargs):
 
     target_source = Path(args.target)
     if chain_mapping is not None and "t" in chain_mapping:
-        target_pdb = apply_chain_mapping(
+        target_source = apply_chain_mapping(
             Path(args.target), chain_mapping["t"], Path(args.target).with_suffix(".remapped.pdb")
         )
 
