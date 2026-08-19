@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--target", required=True, type=Path)
     parser.add_argument("--prediction", required=True, type=Path)
     parser.add_argument("--target-chain", type=str, default=None)
+    parser.add_argument("--prediction-chain", type=str, default=None)
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
@@ -480,71 +481,84 @@ def get_chain_ids(pdb_path: Path) -> list[str]:
     model = next(iter(structure))
     return [chain.id for chain in model]
 
+def announce_chains(label: str, chain_ids: list[str], flag_name: str) -> None:
+    if len(chain_ids) > 1:
+        print(
+            f"{label} has multiple chains {chain_ids} - using all of them "
+            f"by default. Pass {flag_name} to select just one instead."
+        )
+
+
+def extract_single_chain(pdb_path: Path, chain_id: str) -> Path:
+    class _ChainSelector(Select):
+        def accept_chain(self, chain):
+            return chain.id == chain_id
+
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure(pdb_path.stem, str(pdb_path))
+    model = next(iter(structure))
+
+    out_path = pdb_path.with_suffix(f".chain{chain_id}.pdb")
+    io = PDBIO()
+    io.set_structure(model)
+    io.save(str(out_path), _ChainSelector())
+    return out_path
+
 
 def resolve_target_pdb(
     target_pdb: Path,
     target_chain: str | None,
-    prediction_paths: list[Path],
     use_bpseq: bool = False,
     use_motif_tree: bool = False,
-) -> tuple[Path, str | None]:
+) -> Path:
     if use_bpseq or use_motif_tree:
-        return target_pdb, target_chain
+        return target_pdb
 
     target_chain_ids = get_chain_ids(target_pdb)
 
-    if target_chain is not None:
-        if target_chain not in target_chain_ids:
-            raise ValueError(
-                f"--target-chain {target_chain!r} not found in {target_pdb} "
-                f"- available chains: {target_chain_ids}"
-            )
-        if len(target_chain_ids) == 1:
-            return target_pdb, target_chain
-    else:
-        if len(target_chain_ids) == 1:
-            return target_pdb, target_chain
+    if target_chain is None:
+        announce_chains(f"Target ({target_pdb.name})", target_chain_ids, "--target-chain")
+        return target_pdb
 
-        prediction_chain_counts = {
-            len(get_chain_ids(prediction_path))
-            for prediction_path in prediction_paths
-        }
+    if target_chain not in target_chain_ids:
+        raise ValueError(
+            f"--target-chain {target_chain!r} not found in {target_pdb} "
+            f"- available chains: {target_chain_ids}"
+        )
+    if len(target_chain_ids) == 1:
+        return target_pdb
 
-        if prediction_chain_counts == {len(target_chain_ids)}:
-            return target_pdb, target_chain
-
-        if prediction_chain_counts == {1}:
-            target_chain = target_chain_ids[0]
-            print(
-                f"No --target-chain specified. Target has "
-                f"{len(target_chain_ids)} chains and predictions are "
-                f"single-chain. Using first target chain "
-                f"{target_chain!r} by default."
-            )
-        else:
-            print(
-                f"Target has {len(target_chain_ids)} chains, but "
-                f"prediction chain counts are not uniform "
-                f"({sorted(prediction_chain_counts)}) - falling back to "
-                f"the full target."
-            )
-            return target_pdb, target_chain
-
-    class _ChainSelector(Select):
-        def accept_chain(self, chain):
-            return chain.id == target_chain
-
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure(target_pdb.stem, str(target_pdb))
-    model = next(iter(structure))
-
-    out_path = target_pdb.with_suffix(f".chain{target_chain}.pdb")
-    io = PDBIO()
-    io.set_structure(model)
-    io.save(str(out_path), _ChainSelector())
-
+    out_path = extract_single_chain(target_pdb, target_chain)
     print(f"Using target chain {target_chain!r}: {out_path}")
-    return out_path, target_chain
+    return out_path
+
+
+def resolve_prediction_chains(
+    prediction_paths: list[Path], prediction_chain: str | None
+) -> list[Path]:
+    resolved = []
+    for path in prediction_paths:
+        chain_ids = get_chain_ids(path)
+
+        if prediction_chain is None:
+            announce_chains(path.name, chain_ids, "--prediction-chain")
+            resolved.append(path)
+            continue
+
+        if prediction_chain not in chain_ids:
+            raise ValueError(
+                f"--prediction-chain {prediction_chain!r} not found in "
+                f"{path} - available chains: {chain_ids}"
+            )
+        if len(chain_ids) == 1:
+            resolved.append(path)
+            continue
+
+        out_path = extract_single_chain(path, prediction_chain)
+        print(f"Using prediction chain {prediction_chain!r} for {path.name}: {out_path}")
+        resolved.append(out_path)
+
+    return resolved
 
 
 def load_structure(pdb_path: Path):
@@ -881,23 +895,26 @@ def main():
         chain_mapping = parse_chain_mapping(args.chain_mapping)
         prediction_paths = remap_prediction_paths(prediction_paths, chain_mapping)
 
+    target_source = args.target
     if chain_mapping is not None and "t" in chain_mapping:
-        target_pdb = apply_chain_mapping(
+        target_source = apply_chain_mapping(
             args.target, chain_mapping["t"], args.target.with_suffix(".remapped.pdb")
         )
-        target_chain = None
-    else:
-        target_pdb, target_chain = resolve_target_pdb(
-            args.target,
-            getattr(args, "target_chain", None),
-            prediction_paths,
-            use_bpseq=args.bpseq is not None,
-            use_motif_tree=args.motif_tree is not None,
-        )
+
+    target_pdb = resolve_target_pdb(
+        target_source,
+        getattr(args, "target_chain", None),
+        use_bpseq=args.bpseq is not None,
+        use_motif_tree=args.motif_tree is not None,
+    )
+
+    prediction_paths = resolve_prediction_chains(
+        prediction_paths, getattr(args, "prediction_chain", None)
+    )
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, target_chain, getattr(args, "remove_isolated", False),
+        args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -930,23 +947,26 @@ def struct_rmsd_main(workdir, kwargs):
         chain_mapping = parse_chain_mapping(args.chain_mapping)
         prediction_paths = remap_prediction_paths(prediction_paths, chain_mapping)
 
+    target_source = Path(args.target)
     if chain_mapping is not None and "t" in chain_mapping:
         target_pdb = apply_chain_mapping(
             Path(args.target), chain_mapping["t"], Path(args.target).with_suffix(".remapped.pdb")
         )
-        target_chain = None
-    else:
-        target_pdb, target_chain = resolve_target_pdb(
-            Path(args.target),
-            getattr(args, "target_chain", None),
-            prediction_paths,
-            use_bpseq=args.bpseq is not None,
-            use_motif_tree=args.motif_tree is not None,
-        )
+
+    target_pdb = resolve_target_pdb(
+        target_source,
+        getattr(args, "target_chain", None),
+        use_bpseq=args.bpseq is not None,
+        use_motif_tree=args.motif_tree is not None,
+    )
+
+    prediction_paths = resolve_prediction_chains(
+        prediction_paths, getattr(args, "prediction_chain", None)
+    )
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, target_chain, getattr(args, "remove_isolated", False),
+        args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)

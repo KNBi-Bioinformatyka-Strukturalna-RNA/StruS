@@ -68,6 +68,7 @@ Usage:
     parser.add_argument("--tm-threshold", type=float, default=0.45)
     parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--target-chain", type=str, default=None)
+    parser.add_argument("--prediction-chain", type=str, default=None)
     parser.add_argument("--chain-mapping", type=str, default=None)
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))

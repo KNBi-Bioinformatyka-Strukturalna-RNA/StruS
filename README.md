@@ -106,7 +106,9 @@ and therefore does **not** perform sequence alignment or residue renumbering aut
 
 If residue numbering differs between the target and predictions, RMSD values may be incorrect or motifs may be skipped because matching atoms cannot be found.
 
-**Multi-chain targets are supported.** If the target and all predictions have the same number of chains, they are matched by position automatically (first chain of the target with the first chain of the prediction, and so on). If the target has more chains than a prediction (e.g. a monomeric prediction against a multi-chain target), the target is reduced to a single chain - by default the first one found, or a specific one selected with `--target-chain`. For full manual control over how chains are split and matched, use `--chain-mapping` instead.
+**Multi-chain targets and predictions are supported, and are never reduced automatically.** By default, the full target and the full prediction are always compared as-is - motifs (and, for `--dbn`, whole motif ranges) that don't fit within a given prediction's residue range are simply skipped individually rather than causing an error. If either the target or a prediction has more than one chain, the program prints which chains it found and reminds you that you can select just one.
+
+To restrict the target to a single chain, use `--target-chain`. To restrict predictions to a single chain (applied uniformly to every prediction in the run), use `--prediction-chain`. Both accept the original chain letter from the file - or, if `--chain-mapping` was also used, the newly assigned chain letter from that remapping (chain selection is always applied after chain mapping, on its result).
 
 To analyse multiple targets, run the program separately for each target.
 
@@ -214,7 +216,7 @@ motif list
 
 The program uses the same underlying mechanism (`BpSeq.elements`) as the `motif-extractor` utility from rnapolis, but accesses it directly through the Python API instead of executing the external program.
 
-Multi-chain Dot-Bracket files are supported: chains are detected and, if `--target-chain` is given, motifs spanning more than one chain are dropped and the rest are renumbered to that chain.
+Multi-chain Dot-Bracket files are supported: chains are detected and, if `--target-chain` is given, motifs spanning more than one chain are dropped and the rest are renumbered to that chain. Without `--target-chain`, the full, multi-chain target is used and cross-chain motifs are kept as-is.
 
 ---
 
@@ -275,8 +277,8 @@ Rules:
 
 - A file not mentioned in `--chain-mapping` at all is left completely untouched.
 - A file that **is** mentioned has its chain layout **fully replaced** by the given definition - anything not explicitly listed for that file is dropped, even if it belongs to a chain that was partially mentioned.
-- If `t:` is given, it entirely replaces the normal `--target-chain`/automatic chain-matching logic for the target.
 - Predictions not covered by `--chain-mapping` still go through the normal, automatic position-based matching against the (possibly remapped) target - there is no automatic verification that their chain order actually corresponds to the target's manual definition.
+- `--target-chain` and `--prediction-chain` are applied *after* `--chain-mapping` - they refer to the newly created chain letters (A, B, ...), not the original ones.
 
 ## Workflow
 
@@ -383,6 +385,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--target` | reference RNA structure (required) |
 | `--prediction` | single prediction file or a directory of predictions (required) |
 | `--target-chain` | chain to reduce the target to, for multi-chain targets |
+| `--prediction-chain` | chain to reduce every prediction to, for multi-chain predictions |
 | `--chain-mapping` | manual, per-file chain layout definition |
 | `--motif-tree` | previously generated motif list |
 | `--dbn` | Dot-Bracket secondary structure |
