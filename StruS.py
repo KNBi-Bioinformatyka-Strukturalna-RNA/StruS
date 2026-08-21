@@ -64,8 +64,12 @@ Usage:
     parser.add_argument("--motif-tree", type=Path, default=None)
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
+    parser.add_argument("--remove-isolated", action="store_true")
     parser.add_argument("--tm-threshold", type=float, default=0.45)
+    parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--target-chain", type=str, default=None)
+    parser.add_argument("--prediction-chain", type=str, default=None)
+    parser.add_argument("--chain-mapping", type=str, default=None)
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
@@ -277,8 +281,6 @@ def main():
 
     target = check_file(args.target)
     mbr_path = Path(args.mbr)
-    if not mbr_path.is_file():
-        raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
     pred_dir = None 
 
     if args.pred_dir:
@@ -296,14 +298,24 @@ def main():
     else:
         raise RuntimeError("Provide a prediction file or -p prediction_folder")
 
-    if args.tool == "BOTH":
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, threshold=args.threshold)
+    if args.tool is None:
+        if not mbr_path.is_file():
+            raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
         execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, threshold=args.threshold)
-
+        if not mbr_path.is_file():
+            raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr)
+        
     elif args.tool == "structRMSD":
+        execute_struct_rmsd(args, workdir)
+        
+    elif args.tool == "BOTH":
+        if not mbr_path.is_file():
+            raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, threshold=args.threshold)
         execute_struct_rmsd(args, workdir)
 
 

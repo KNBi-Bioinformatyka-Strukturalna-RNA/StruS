@@ -82,14 +82,15 @@ The program performs the following steps:
 - motif extraction directly from **Dot-Bracket** or **BPSEQ**
 - reuse of previously generated motif lists
 - automatic filtering of predictions using global TM-score
-- all-atom local RMSD calculation for every motif
+- all-atom local RMSD calculation for every motif, with an adjustable coverage threshold
 - local TM-score calculation for every motif (where the motif is long enough)
-- support for multi-chain targets and predictions
+- optional removal of isolated base pairs before motif detection
+- support for multi-chain targets and predictions, including fully manual chain definitions
 - CSV export of detailed and summary results
 
 ## Assumptions
 
-RNAMotifFinder assumes that:
+structRMSD assumes that:
 
 - each execution analyses **one reference RNA structure (target)**;
 - residue numbering is identical between the target and every prediction;
@@ -105,7 +106,9 @@ and therefore does **not** perform sequence alignment or residue renumbering aut
 
 If residue numbering differs between the target and predictions, RMSD values may be incorrect or motifs may be skipped because matching atoms cannot be found.
 
-**Multi-chain targets are supported.** If the target and all predictions have the same number of chains, they are matched by position automatically (first chain of the target with the first chain of the prediction, and so on). If the target has more chains than a prediction (e.g. a monomeric prediction against a multi-chain target), the target is reduced to a single chain - by default the first one found, or a specific one selected with `--target-chain`.
+**Multi-chain targets and predictions are supported, and are never reduced automatically.** By default, the full target and the full prediction are always compared as-is - motifs (and, for `--dbn`, whole motif ranges) that don't fit within a given prediction's residue range are simply skipped individually rather than causing an error. If either the target or a prediction has more than one chain, the program prints which chains it found and reminds you that you can select just one.
+
+To restrict the target to a single chain, use `--target-chain`. To restrict predictions to a single chain (applied uniformly to every prediction in the run), use `--prediction-chain`. Both accept the original chain letter from the file - or, if `--chain-mapping` was also used, the newly assigned chain letter from that remapping (chain selection is always applied after chain mapping, on its result).
 
 To analyse multiple targets, run the program separately for each target.
 
@@ -158,16 +161,19 @@ motif list
 ```
 
 ```
-target.pdb
+ target.pdb
       │
       ▼
-annotator
+  annotator
       │
       ▼
 annotator.json
       │
       ▼
-motif list
+    BPSEQ
+      │
+      ▼
+  motif list
 ```
 
 ---
@@ -180,7 +186,7 @@ Previously generated motif lists can be reused.
 --motif-tree target.structure_tree.json
 ```
 
-No motif detection is performed.
+No motif detection is performed. `--remove-isolated` has no effect here
 
 ---
 
@@ -210,7 +216,7 @@ motif list
 
 The program uses the same underlying mechanism (`BpSeq.elements`) as the `motif-extractor` utility from rnapolis, but accesses it directly through the Python API instead of executing the external program.
 
-Multi-chain Dot-Bracket files are supported: chains are detected and, if `--target-chain` is given, motifs spanning more than one chain are dropped and the rest are renumbered to that chain.
+Multi-chain Dot-Bracket files are supported: chains are detected and, if `--target-chain` is given, motifs spanning more than one chain are dropped and the rest are renumbered to that chain. Without `--target-chain`, the full, multi-chain target is used and cross-chain motifs are kept as-is.
 
 ---
 
@@ -239,6 +245,41 @@ An externally supplied BPSEQ file describes one fixed numbering of the target as
 
 ---
 
+## Removing isolated base pairs
+
+```
+--remove-isolated
+```
+
+A single, unstacked base pair (a "stem" of length 1) is often geometric noise rather than a real structural element. With `--remove-isolated`, such pairs are dropped before the target is decomposed into motifs, and the decomposition is recomputed on the cleaned-up pairing table - neighbouring motifs are merged or resized accordingly.
+
+This works for `--annotator`, `--dbn`, `--bpseq` and `--fr3d` (all four are internally converted to a `BpSeq` object before motif extraction). It has no effect with `--motif-tree`, since an already-computed motif list cannot be recomputed - a warning is printed instead.
+
+---
+
+## Manual chain mapping
+
+```
+--chain-mapping "t:A21-40;A1-20;;prediction_1.pdb:A1-20;B1-20"
+```
+
+lets you define the chain layout explicitly, per file.
+
+Syntax:
+
+- `;;` separates the definition blocks for different files.
+- Each block starts with a file identifier followed by `:` - `t` for the target, or the exact filename for a prediction.
+- Within a block, `;` separates logical chains, numbered in the order given (first one becomes the new chain A, second one chain B, and so on).
+- Within a single logical chain, `+` joins segments (even from different original chains) into one, in the given order.
+- Each segment is written as `<original_chain><first>-<last>` (e.g. `A21-40`).
+
+Rules:
+
+- A file not mentioned in `--chain-mapping` at all is left completely untouched.
+- A file that **is** mentioned has its chain layout **fully replaced** by the given definition - anything not explicitly listed for that file is dropped, even if it belongs to a chain that was partially mentioned.
+- Predictions not covered by `--chain-mapping` still go through the normal, automatic position-based matching against the (possibly remapped) target - there is no automatic verification that their chain order actually corresponds to the target's manual definition.
+- `--target-chain` and `--prediction-chain` are applied *after* `--chain-mapping` - they refer to the newly created chain letters (A, B, ...), not the original ones.
+
 ## Workflow
 
 ```
@@ -249,6 +290,8 @@ An externally supplied BPSEQ file describes one fixed numbering of the target as
          FR3D      annotator      DBN/BPSEQ   structure_tree.json  │
            │           │             │              │              │
            └───────────┴─────────────┴──────────────┴──────────────┘
+                                     │
+                     (optional: remove isolated pairs)
                                      │
                                motif list
                                      │
@@ -293,7 +336,7 @@ For every structural motif the program:
 4. performs optimal local superposition using the Kabsch algorithm (`Bio.PDB.Superimposer`),
 5. computes all-atom RMSD.
 
-If the fraction of matched atoms is below the selected coverage threshold (90% by default), RMSD is not calculated for that motif.
+If the fraction of matched atoms is below the coverage threshold, RMSD is not calculated for that motif. The threshold defaults to 90% and can be changed with `--min-coverage` (e.g. `--min-coverage 0.5`).
 
 ---
 
@@ -301,7 +344,7 @@ If the fraction of matched atoms is below the selected coverage threshold (90% b
 
 In addition to RMSD, the program also attempts to compute a local TM-score for every motif, using USalign on just that motif's residues (extracted to a temporary fragment PDB for both target and prediction).
 
-This requires at least 3 residues in the motif - USalign cannot produce a usable result on shorter fragments. Motifs with fewer than 3 residues have an empty `motif_tm_score` value, while `motif_rmsd` is still calculated normally for them.
+This requires at least 3 residues in the motif - USalign cannot produce a usable result on shorter fragments. Motifs with fewer than 3 residues have an `n/a` `motif_tm_score` value, while `motif_rmsd` is still calculated normally for them.
 
 ---
 
@@ -342,13 +385,16 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--target` | reference RNA structure (required) |
 | `--prediction` | single prediction file or a directory of predictions (required) |
 | `--target-chain` | chain to reduce the target to, for multi-chain targets |
+| `--prediction-chain` | chain to reduce every prediction to, for multi-chain predictions |
+| `--chain-mapping` | manual, per-file chain layout definition |
 | `--motif-tree` | previously generated motif list |
 | `--dbn` | Dot-Bracket secondary structure |
 | `--bpseq` | BPSEQ secondary structure |
 | `--annotator` | detect motifs using the rnapolis annotator |
-| `--annotator-json` | reuse an already-generated annotator JSON instead of running annotator again (used with `--annotator`) |
 | `--fr3d` | detect motifs using FR3D (default if no other source is given) |
+| `--remove-isolated` | drop isolated base pairs before motif detection |
 | `--tm-threshold` | minimum accepted TM-score (default: 0.45) |
+| `--min-coverage` | minimum fraction of matched atoms required to compute a motif's RMSD (default: 0.9) |
 | `--usalign-bin` | path to USalign executable (auto-detected/downloaded if not given) |
 | `--out-per-motif` | output CSV containing per-motif results |
 | `--out-summary` | output CSV containing summary statistics |
@@ -372,7 +418,7 @@ Columns:
 - `motif_type`
 - `residue_range`
 - `prediction_file`
-- `motif_tm_score` - TM-score of this motif alone (empty if the motif has fewer than 3 residues, or if USalign failed on the fragment)
+- `motif_tm_score` - TM-score of this motif alone 
 - `motif_rmsd` - RMSD of this motif alone
 
 Only predictions that passed the global TM-score filter appear in this file.
@@ -421,7 +467,7 @@ Loop motifs are classified automatically according to the number and length of t
 - RMSD is always calculated from 3D atomic coordinates stored in the target and prediction structures.
 - The program assumes consistent residue numbering between the target and all predictions.
 - The program performs local superposition independently for every motif using the Kabsch algorithm implemented in BioPython.
-- All atoms belonging to a motif are included in the RMSD calculation (all-atom RMSD).
+- All atom **types** are included in the RMSD calculation (all-atom RMSD, not restricted to backbone or any other subset) - but for any given motif, only the atoms present in **both** the target and the prediction are actually superposed.
 - Predictions whose global TM-score is below the selected threshold are excluded before motif-level analysis.
 - If a prediction's total residue count doesn't match the target's, motifs whose residues extend beyond the prediction's range are skipped individually (with a message) rather than skipping the whole prediction.
 
