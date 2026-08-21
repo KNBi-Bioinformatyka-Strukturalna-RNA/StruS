@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser(description="Convert an extended DBN structure 
 parser.add_argument("input", help="Input DBN file")
 parser.add_argument("-o", "--output", default="structure_tree.json", help="Output JSON file")
 parser.add_argument("--remove_pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' and ')' are permanently replaced with '.'.")
-
+parser.add_argument("--remove_isolated", action="store_true", help="Remove isolated base pairs (stems of length 1) before processing the dot-bracket structure. Such pairs are replaced with '.'.")
 args = parser.parse_args()
 
 INPUT = Path(args.input)
@@ -46,6 +46,21 @@ def read_dbn(path):
 
 def remove_pseudoknots(structure):
     return "".join(char if char in "()" else "." for char in structure)
+
+def remove_isolated_pairs(structure):
+    pairs = get_pairs(structure)
+    if not pairs:
+        return structure
+
+    stems = find_stems(pairs)
+    structure_chars = list(structure)
+    for stem in stems:
+        length = stem["left_last"] - stem["left_first"] + 1
+        if length == 1:
+            structure_chars[stem["left_first"] - 1] = "."
+            structure_chars[stem["right_last"] - 1] = "."
+
+    return "".join(structure_chars)
 
 def get_pairs(structure):
     stacks = {opening: [] for opening, _ in BRACKET_PAIRS}
@@ -399,6 +414,8 @@ def build_structure_graph(sequence, structure, remove_pseudoknots_flag=False):
 def main():
     try:
         sequence, structure = read_dbn(INPUT)
+        if args.remove_isolated:
+            structure = remove_isolated_pairs(structure)
         graph = build_structure_graph(sequence, structure, remove_pseudoknots_flag=args.remove_pseudoknots)
         if OUTPUT.exists() and OUTPUT.is_dir():
             raise ValueError(f"Output path is a directory: {OUTPUT}")
