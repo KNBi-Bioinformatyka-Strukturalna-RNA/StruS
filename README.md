@@ -87,6 +87,8 @@ The program performs the following steps:
 - optional removal of isolated base pairs before motif detection
 - support for multi-chain targets and predictions, including fully manual chain definitions
 - CSV export of detailed and summary results
+- normalized RMSD (nRMSD = RMSD / √(number of atoms used)) alongside raw RMSD, to account for motifs of different sizes
+- full descriptive statistics (mean, std, min, Q1, median, Q3, max) for RMSD, nRMSD and TM-score, both per individual motif and aggregated by motif type
 
 ## Assumptions
 
@@ -398,6 +400,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--usalign-bin` | path to USalign executable (auto-detected/downloaded if not given) |
 | `--out-per-motif` | output CSV containing per-motif results |
 | `--out-summary` | output CSV containing summary statistics |
+| `--out-by-type` | output CSV containing summary statistics aggregated by motif type |
 
 Exactly one of `--motif-tree`, `--dbn`, `--bpseq`, `--annotator`, `--fr3d` may be given at a time.
 ---
@@ -420,6 +423,7 @@ Columns:
 - `prediction_file`
 - `motif_tm_score` - TM-score of this motif alone 
 - `motif_rmsd` - RMSD of this motif alone
+- `motif_nrmsd` - RMSD normalized by the square root of the number of atoms used
 
 Only predictions that passed the global TM-score filter appear in this file.
 
@@ -434,11 +438,20 @@ Columns:
 - `motif_id`
 - `motif_type`
 - `residue_range`
-- `n_predictions`
-- `mean_rmsd`
-- `std_rmsd`
+- `n_predictions` - number of predictions for which RMSD was actually calculated for this motif
+- for each of `rmsd`, `nrmsd` and `tm_score`: `mean_*`, `std_*`, `min_*`, `q1_*`, `median_*`, `q3_*`, `max_*` (`N/A` if no prediction produced a result for this motif)
 
 ---
+
+## `motif_type_summary.csv`
+
+Each row corresponds to one motif **type** (e.g. all stems across the whole target pooled together, regardless of which specific stem they came from).
+
+Columns:
+
+- `motif_type`
+- `n_values` - number of (motif, prediction) pairs pooled into this row
+- the same set of statistics as `motif_summary.csv` (mean/std/min/Q1/median/Q3/max) for `rmsd`, `nrmsd` and `tm_score`
 
 ## Motif types
 

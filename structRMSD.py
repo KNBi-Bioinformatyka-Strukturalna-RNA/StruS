@@ -9,6 +9,7 @@ import tempfile
 import re
 import string
 import urllib.request
+import math
 from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -67,6 +68,7 @@ def parse_args():
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
+    parser.add_argument("--out-by-type", type=Path, default=Path("motif_type_summary.csv"))
     args = parser.parse_args()
 
     try:
@@ -736,7 +738,7 @@ def compute_motif_tm_score(
 
 def compute_motif_rmsd(
     target_index, prediction_index, motif: dict, min_coverage: float = 0.9
-) -> float | None:
+) -> tuple[float, int] | None:
     residue_ids = collect_motif_residue_ids(motif)
     target_atoms = get_atoms_by_residue(target_index, residue_ids)
     prediction_atoms = get_atoms_by_residue(prediction_index, residue_ids)
@@ -762,7 +764,7 @@ def compute_motif_rmsd(
 
     superimposer = Superimposer()
     superimposer.set_atoms(fixed, moving)
-    return superimposer.rms
+    return superimposer.rms, len(common_keys)
 
 
 def format_residue_range(motif: dict) -> str:
@@ -804,7 +806,14 @@ def process_target(
                     )
                     continue
 
-            motif_rmsd = compute_motif_rmsd(target_index, prediction_index, motif, min_coverage)
+            rmsd_result = compute_motif_rmsd(target_index, prediction_index, motif, min_coverage)
+            if rmsd_result is not None:
+                motif_rmsd, n_atoms = rmsd_result
+                motif_nrmsd = motif_rmsd / math.sqrt(n_atoms)
+            else:
+                motif_rmsd = None
+                motif_nrmsd = None
+
             motif_tm_score = compute_motif_tm_score(
                 target_model, target_index, prediction_model, prediction_index,
                 motif, usalign_bin
@@ -817,9 +826,29 @@ def process_target(
                 "prediction_file": prediction_path.name,
                 "motif_tm_score": motif_tm_score,
                 "motif_rmsd": motif_rmsd,
+                "motif_nrmsd": motif_nrmsd,
             })
 
     return records
+
+
+def compute_stats(values: list[float]) -> dict:
+    if not values:
+        return {"mean": None, "std": None, "min": None, "q1": None, "median": None, "q3": None, "max": None}
+    if len(values) == 1:
+        v = values[0]
+        return {"mean": v, "std": 0.0, "min": v, "q1": v, "median": v, "q3": v, "max": v}
+
+    q1, median, q3 = statistics.quantiles(values, n=4)
+    return {
+        "mean": statistics.mean(values),
+        "std": statistics.pstdev(values),
+        "min": min(values),
+        "q1": q1,
+        "median": median,
+        "q3": q3,
+        "max": max(values),
+    }
 
 
 def aggregate_stats(records: list[dict]) -> list[dict]:
@@ -831,24 +860,70 @@ def aggregate_stats(records: list[dict]) -> list[dict]:
     for motif_id in sorted(by_motif):
         group = by_motif[motif_id]
         rmsds = [r["motif_rmsd"] for r in group if r["motif_rmsd"] is not None]
+        nrmsds = [r["motif_nrmsd"] for r in group if r["motif_nrmsd"] is not None]
+        tm_scores = [r["motif_tm_score"] for r in group if r["motif_tm_score"] is not None]
 
-        if rmsds:
-            mean_rmsd = statistics.mean(rmsds)
-            std_rmsd = statistics.pstdev(rmsds) if len(rmsds) > 1 else 0.0
-        else:
-            mean_rmsd = None
-            std_rmsd = None
+        rmsd_stats = compute_stats(rmsds)
+        nrmsd_stats = compute_stats(nrmsds)
+        tm_stats = compute_stats(tm_scores)
 
         summary.append({
             "motif_id": motif_id,
             "motif_type": group[0]["motif_type"],
             "residue_range": group[0]["residue_range"],
             "n_predictions": len(rmsds),
-            "mean_rmsd": mean_rmsd,
-            "std_rmsd": std_rmsd,
+            "mean_rmsd": rmsd_stats["mean"], "std_rmsd": rmsd_stats["std"],
+            "min_rmsd": rmsd_stats["min"], "q1_rmsd": rmsd_stats["q1"],
+            "median_rmsd": rmsd_stats["median"], "q3_rmsd": rmsd_stats["q3"],
+            "max_rmsd": rmsd_stats["max"],
+            "mean_nrmsd": nrmsd_stats["mean"], "std_nrmsd": nrmsd_stats["std"],
+            "min_nrmsd": nrmsd_stats["min"], "q1_nrmsd": nrmsd_stats["q1"],
+            "median_nrmsd": nrmsd_stats["median"], "q3_nrmsd": nrmsd_stats["q3"],
+            "max_nrmsd": nrmsd_stats["max"],
+            "mean_tm_score": tm_stats["mean"], "std_tm_score": tm_stats["std"],
+            "min_tm_score": tm_stats["min"], "q1_tm_score": tm_stats["q1"],
+            "median_tm_score": tm_stats["median"], "q3_tm_score": tm_stats["q3"],
+            "max_tm_score": tm_stats["max"],
         })
 
     return summary
+
+
+def aggregate_stats_by_type(records: list[dict]) -> list[dict]:
+    by_type: dict[str, list[dict]] = {}
+    for record in records:
+        by_type.setdefault(record["motif_type"], []).append(record)
+
+    summary = []
+    for motif_type in sorted(by_type):
+        group = by_type[motif_type]
+        rmsds = [r["motif_rmsd"] for r in group if r["motif_rmsd"] is not None]
+        nrmsds = [r["motif_nrmsd"] for r in group if r["motif_nrmsd"] is not None]
+        tm_scores = [r["motif_tm_score"] for r in group if r["motif_tm_score"] is not None]
+
+        rmsd_stats = compute_stats(rmsds)
+        nrmsd_stats = compute_stats(nrmsds)
+        tm_stats = compute_stats(tm_scores)
+
+        summary.append({
+            "motif_type": motif_type,
+            "n_values": len(rmsds),
+            "mean_rmsd": rmsd_stats["mean"], "std_rmsd": rmsd_stats["std"],
+            "min_rmsd": rmsd_stats["min"], "q1_rmsd": rmsd_stats["q1"],
+            "median_rmsd": rmsd_stats["median"], "q3_rmsd": rmsd_stats["q3"],
+            "max_rmsd": rmsd_stats["max"],
+            "mean_nrmsd": nrmsd_stats["mean"], "std_nrmsd": nrmsd_stats["std"],
+            "min_nrmsd": nrmsd_stats["min"], "q1_nrmsd": nrmsd_stats["q1"],
+            "median_nrmsd": nrmsd_stats["median"], "q3_nrmsd": nrmsd_stats["q3"],
+            "max_nrmsd": nrmsd_stats["max"],
+            "mean_tm_score": tm_stats["mean"], "std_tm_score": tm_stats["std"],
+            "min_tm_score": tm_stats["min"], "q1_tm_score": tm_stats["q1"],
+            "median_tm_score": tm_stats["median"], "q3_tm_score": tm_stats["q3"],
+            "max_tm_score": tm_stats["max"],
+        })
+
+    return summary
+
 
 def to_na(value):
     return "n/a" if value is None else value
@@ -856,7 +931,7 @@ def to_na(value):
 def write_per_motif_csv(records: list[dict], out_path: Path):
     fieldnames = [
         "motif_id", "motif_type", "residue_range",
-        "prediction_file", "motif_tm_score", "motif_rmsd",
+        "prediction_file", "motif_tm_score", "motif_rmsd", "motif_nrmsd",
     ]
 
     rows = [
@@ -872,13 +947,34 @@ def write_per_motif_csv(records: list[dict], out_path: Path):
 
 def write_summary_csv(summary: list[dict], out_path: Path):
     fieldnames = [
-        "motif_id", "motif_type", "residue_range",
-        "n_predictions", "mean_rmsd", "std_rmsd",
+        "motif_id", "motif_type", "residue_range", "n_predictions",
+        "mean_rmsd", "std_rmsd", "min_rmsd", "q1_rmsd", "median_rmsd", "q3_rmsd", "max_rmsd",
+        "mean_nrmsd", "std_nrmsd", "min_nrmsd", "q1_nrmsd", "median_nrmsd", "q3_nrmsd", "max_nrmsd",
+        "mean_tm_score", "std_tm_score", "min_tm_score", "q1_tm_score", "median_tm_score", "q3_tm_score", "max_tm_score",
     ]
 
     rows = [
         {key: to_na(value) for key, value in row.items()}
          for row in summary
+    ]
+
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_motif_type_summary_csv(summary: list[dict], out_path: Path):
+    fieldnames = [
+        "motif_type", "n_values",
+        "mean_rmsd", "std_rmsd", "min_rmsd", "q1_rmsd", "median_rmsd", "q3_rmsd", "max_rmsd",
+        "mean_nrmsd", "std_nrmsd", "min_nrmsd", "q1_nrmsd", "median_nrmsd", "q3_nrmsd", "max_nrmsd",
+        "mean_tm_score", "std_tm_score", "min_tm_score", "q1_tm_score", "median_tm_score", "q3_tm_score", "max_tm_score",
+    ]
+
+    rows = [
+        {key: to_na(value) for key, value in row.items()}
+        for row in summary
     ]
 
     with open(out_path, "w", newline="") as f:
@@ -932,10 +1028,13 @@ def main():
 
     records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin, args.min_coverage)
     summary = aggregate_stats(records)
+    summary_by_type = aggregate_stats_by_type(records)
+
 
     write_per_motif_csv(records, args.out_per_motif)
     write_summary_csv(summary, args.out_summary)
-    print(f"Saved {args.out_per_motif} and {args.out_summary}")
+    write_motif_type_summary_csv(summary_by_type, args.out_by_type)
+    print(f"Saved {args.out_per_motif}, {args.out_summary} and {args.out_by_type}")
 
 
 def struct_rmsd_main(workdir, kwargs):
@@ -984,13 +1083,16 @@ def struct_rmsd_main(workdir, kwargs):
 
     records = process_target(target_pdb, motif_tree, passing_predictions, usalign_bin, getattr(args, "min_coverage", 0.9))
     summary = aggregate_stats(records)
+    summary_by_type = aggregate_stats_by_type(records)
 
     out_per_motif_path = os.path.join(workdir, args.out_per_motif)
     out_summary_path = os.path.join(workdir, args.out_summary)
+    out_by_type_path = os.path.join(workdir, getattr(args, "out_by_type", Path("motif_type_summary.csv")))
 
     write_per_motif_csv(records, out_per_motif_path)
     write_summary_csv(summary, out_summary_path)
-    print(f"Saved {out_per_motif_path} and {out_summary_path}")
+    write_motif_type_summary_csv(summary_by_type, out_by_type_path)
+    print(f"Saved {out_per_motif_path}, {out_summary_path} and {out_by_type_path}")
 
 
 if __name__ == "__main__":
