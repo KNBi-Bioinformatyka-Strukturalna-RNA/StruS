@@ -65,6 +65,7 @@ Usage:
     parser.add_argument("--dbn", type=Path, default=None)
     parser.add_argument("--bpseq", type=Path, default=None)
     parser.add_argument("--remove-isolated", action="store_true")
+    parser.add_argument("--decompose-pseudoknot-free", action="store_true")
     parser.add_argument("--tm-threshold", type=float, default=0.45)
     parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--target-chain", type=str, default=None)

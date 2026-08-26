@@ -62,6 +62,7 @@ def parse_args():
     parser.add_argument("--annotator", action="store_true")
     parser.add_argument("--fr3d", action="store_true")
     parser.add_argument("--remove-isolated", action="store_true")
+    parser.add_argument("--decompose-pseudoknot-free", action="store_true")
     parser.add_argument("--chain-mapping", type=str, default=None)
     parser.add_argument("--tm-threshold", type=float, default=0.45)
     parser.add_argument("--min-coverage", type=float, default=0.9)
@@ -109,6 +110,51 @@ def load_elements_from_bpseq(bpseq: "BpSeq") -> list[dict]:
 
     for i, l in enumerate(loops, 1):
         add_element(f"Loop {i}", [strand_dict(s) for s in l.strands])
+
+    return elements
+
+
+def load_elements_pseudoknot_free(bpseq: "BpSeq") -> list[dict]:
+    full_dotbracket_str = bpseq.dot_bracket.structure
+    pk_free_bpseq = bpseq.without_pseudoknots()
+    stems, single_strands, hairpins, loops = pk_free_bpseq.compute_elements(
+        dotbracket_override=full_dotbracket_str
+    )
+
+    canonical = set("()")
+    full_stems, _, _, _ = bpseq.elements
+    pseudoknot_stems = [
+        stem for stem in full_stems
+        if any(c not in canonical for c in stem.strand5p.structure)
+        or any(c not in canonical for c in stem.strand3p.structure)
+    ]
+
+    elements = []
+    eid = 1
+
+    def add_element(name, strands):
+        nonlocal eid
+        elements.append({"id": eid, "name": name, "strands": strands})
+        eid += 1
+
+    def strand_dict(strand):
+        return {
+            "first": strand.first,
+            "last": strand.last,
+            "sequence": strand.sequence,
+            "structure": strand.structure,
+        }
+
+    for i, s in enumerate(stems, 1):
+        add_element(f"Stem {i}", [strand_dict(s.strand5p), strand_dict(s.strand3p)])
+    for i, s in enumerate(single_strands, 1):
+        add_element(f"SingleStrand {i}", [strand_dict(s.strand)])
+    for i, h in enumerate(hairpins, 1):
+        add_element(f"Hairpin {i}", [strand_dict(h.strand)])
+    for i, l in enumerate(loops, 1):
+        add_element(f"Loop {i}", [strand_dict(s) for s in l.strands])
+    for i, s in enumerate(pseudoknot_stems, 1):
+        add_element(f"PseudoknotStem {i}", [strand_dict(s.strand5p), strand_dict(s.strand3p)])
 
     return elements
 
@@ -388,10 +434,13 @@ def get_motif_tree(
     use_fr3d: bool = False,
     target_chain: str | None = None,
     remove_isolated: bool = False,
+    decompose_pseudoknot_free: bool = False,
 ) -> list[dict]:
     if motif_tree_path is not None:
         if remove_isolated:
             print("--remove-isolated has no effect with --motif-tree (already-computed motifs can't be recomputed)")
+        if decompose_pseudoknot_free:
+            print("--decompose-pseudoknot-free has no effect with --motif-tree (already-computed motifs can't be recomputed)")
         with open(motif_tree_path) as f:
             return json.load(f)
 
@@ -403,7 +452,10 @@ def get_motif_tree(
         bpseq = BpSeq.from_dotbracket(DotBracket.from_file(str(dbn_path)))
         if remove_isolated:
             bpseq = bpseq.without_isolated()
-        elements = load_elements_from_bpseq(bpseq)
+        if decompose_pseudoknot_free:
+            elements = load_elements_pseudoknot_free(bpseq)
+        else:
+            elements = load_elements_from_bpseq(bpseq)
 
         if target_chain is not None:
             elements = restrict_to_target_chain(elements, chain_ranges, target_chain)
@@ -413,7 +465,10 @@ def get_motif_tree(
         bpseq = BpSeq.from_file(str(bpseq_path))
         if remove_isolated:
                     bpseq = bpseq.without_isolated()
-        elements = load_elements_from_bpseq(bpseq)
+        if decompose_pseudoknot_free:
+            elements = load_elements_pseudoknot_free(bpseq)
+        else:
+            elements = load_elements_from_bpseq(bpseq)
     elif use_annotator:
         raw_json_path = Path(target_pdb).with_suffix(".annotator.json")
         run_annotator(target_pdb, raw_json_path)
@@ -427,7 +482,10 @@ def get_motif_tree(
         bpseq = BpSeq.from_file(str(annotator_bpseq_path))
         if remove_isolated:
             bpseq = bpseq.without_isolated()
-        elements = load_elements_from_bpseq(bpseq)
+        if decompose_pseudoknot_free:
+            elements = load_elements_pseudoknot_free(bpseq)
+        else:
+            elements = load_elements_from_bpseq(bpseq)
     elif use_fr3d:
         basepairs_path = run_fr3d(target_pdb)
         raw_pairs = parse_fr3d_basepairs(basepairs_path)
@@ -441,7 +499,10 @@ def get_motif_tree(
         bpseq = BpSeq.from_file(str(fr3d_bpseq_path))
         if remove_isolated:
                     bpseq = bpseq.without_isolated()
-        elements = load_elements_from_bpseq(bpseq)
+        if decompose_pseudoknot_free:
+            elements = load_elements_pseudoknot_free(bpseq)
+        else:
+            elements = load_elements_from_bpseq(bpseq)
     else:
         raise ValueError("get_motif_tree: no motif source given")
 
@@ -473,6 +534,9 @@ def motif_type_from_name(motif: dict) -> str:
                 return "bulge"
             return "internal_loop"
         return "loop_unexpected_strand_count"
+
+    if prefix == "PseudoknotStem":
+        return "pseudoknot_stem"
 
     return prefix.lower()
 
@@ -1014,6 +1078,7 @@ def main():
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
         args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
+        getattr(args, "decompose_pseudoknot_free", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -1069,6 +1134,7 @@ def struct_rmsd_main(workdir, kwargs):
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
         args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
+        getattr(args, "decompose_pseudoknot_free", False),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -1097,3 +1163,5 @@ def struct_rmsd_main(workdir, kwargs):
 
 if __name__ == "__main__":
     main()
+
+    

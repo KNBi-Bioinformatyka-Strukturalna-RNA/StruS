@@ -89,6 +89,7 @@ The program performs the following steps:
 - CSV export of detailed and summary results
 - normalized RMSD (nRMSD = RMSD / √(number of atoms used)) alongside raw RMSD, to account for motifs of different sizes
 - full descriptive statistics (mean, std, min, Q1, median, Q3, max) for RMSD, nRMSD and TM-score, both per individual motif and aggregated by motif type
+- optional pseudoknot-aware decomposition, separating pseudoknot-forming stems into their own category instead of forcing them into the standard stem/hairpin/loop scheme
 
 ## Assumptions
 
@@ -395,6 +396,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--annotator` | detect motifs using the rnapolis annotator |
 | `--fr3d` | detect motifs using FR3D (default if no other source is given) |
 | `--remove-isolated` | drop isolated base pairs before motif detection |
+| `--decompose-pseudoknot-free` | separate pseudoknot-forming stems into their own category before the rest of the target is decomposed |
 | `--tm-threshold` | minimum accepted TM-score (default: 0.45) |
 | `--min-coverage` | minimum fraction of matched atoms required to compute a motif's RMSD (default: 0.9) |
 | `--usalign-bin` | path to USalign executable (auto-detected/downloaded if not given) |
@@ -467,6 +469,7 @@ The `motif_type` column classifies motifs into one of the following categories.
 | `junction_3way` | Three-way junction |
 | `junction_4way` | Four-way junction |
 | `junction_nway` | Multi-way junction with *n* branches |
+| `pseudoknot_stem` | A stem-forming base pair that crosses another pair (a pseudoknot); only reported separately when `--decompose-pseudoknot-free` is used |
 
 Loop motifs are classified automatically according to the number and length of their strands.
 
