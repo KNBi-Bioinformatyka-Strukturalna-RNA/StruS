@@ -633,8 +633,8 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         if info["matched"] and info["scored"]
     )
     total_pen = (pred_matched_penalty
-                 + n_unmatched_pred   * UNMATCHED_PENALTY
-                 + n_unmatched_target * UNMATCHED_PENALTY)
+                 + n_unmatched_pred   * UNMATCHED_PENALTY/2
+                 + n_unmatched_target * UNMATCHED_PENALTY/2)
     avg_pen = total_pen / (n_pred + n_target - n_matched_scored)
 
     # Separate total for target-anchored metric - excludes unmatched prediction
@@ -646,7 +646,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     #   worst = (n_target + n_pred) x UNMATCHED_PENALTY
     #   Extra nodes in prediction raise the ceiling - larger predictions are
     #   penalised more for any unmatched node.
-    worst_sym    = (n_target + n_pred) * UNMATCHED_PENALTY
+    worst_sym    = (n_target + n_pred) * UNMATCHED_PENALTY/2
     range_sym    = worst_sym - best_possible
     norm_penalty = (total_pen - best_possible) / range_sym if range_sym > 0 else 0.0
     norm_penalty = 1.0-float(np.clip(norm_penalty, 0.0, 1.0))
