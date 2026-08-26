@@ -77,6 +77,7 @@ Usage:
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
     parser.add_argument("--out-by-type", type=Path, default=Path("motif_type_summary.csv"))
+    parser.add_argument("--out-by-model", type=Path, default=Path("per_model_summary.csv"))
     args = parser.parse_args()
 
     if sum([args.annotator, args.fr3d, args.dbn_rtbs]) > 1:

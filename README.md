@@ -427,6 +427,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--out-per-motif` | output CSV containing per-motif results |
 | `--out-summary` | output CSV containing summary statistics |
 | `--out-by-type` | output CSV containing summary statistics aggregated by motif type |
+| `--out-by-model` | output CSV containing summary statistics aggregated by prediction (model) |
 
 Exactly one of `--motif-tree`, `--dbn`, `--bpseq`, `--annotator`, `--fr3d`, `--external-tool` may be given at a time.
 ---
@@ -478,6 +479,20 @@ Columns:
 - `motif_type`
 - `n_values` - number of (motif, prediction) pairs pooled into this row
 - the same set of statistics as `motif_summary.csv` (mean/std/min/Q1/median/Q3/max) for `rmsd`, `nrmsd` and `tm_score`
+
+---
+
+## `per_model_summary.csv`
+
+Each row corresponds to one prediction file, pooling together its results across all of its own motifs (whichever ones actually got a value for that particular prediction).
+
+Columns:
+
+- `prediction_file`
+- `n_values` - number of motifs (within this one prediction) that actually produced a result
+- the same set of statistics as `motif_summary.csv` (mean/std/min/Q1/median/Q3/max) for `rmsd`, `nrmsd` and `tm_score`
+
+---
 
 ## Motif types
 
