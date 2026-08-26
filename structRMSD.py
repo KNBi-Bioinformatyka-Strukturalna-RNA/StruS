@@ -37,6 +37,7 @@ def validate_motif_source(args) -> None:
         getattr(args, "bpseq", None) is not None,
         getattr(args, "annotator", False),
         getattr(args, "fr3d", False),
+        getattr(args, "external_tool", None) is not None,
     ]
     n = sum(motif_sources_given)
     if n == 0:
@@ -61,6 +62,8 @@ def parse_args():
     parser.add_argument("--bpseq", type=Path, default=None)
     parser.add_argument("--annotator", action="store_true")
     parser.add_argument("--fr3d", action="store_true")
+    parser.add_argument("--external-tool", choices=["fr3d", "dssr", "rnaview", "bpnet", "maxit", "barnaba", "mc-annotate", "dnatco"], default=None)
+    parser.add_argument("--external-output", type=Path, default=None)
     parser.add_argument("--remove-isolated", action="store_true")
     parser.add_argument("--decompose-pseudoknot-free", action="store_true")
     parser.add_argument("--chain-mapping", type=str, default=None)
@@ -337,6 +340,19 @@ def run_fr3d(target_pdb: Path) -> Path:
     return basepairs_path
 
 
+def run_adapter(target_pdb: Path, external_tool: str, external_output: Path) -> Path:
+    bpseq_out = Path(target_pdb).with_suffix(".adapter.bpseq")
+    cmd = [
+        "adapter", str(target_pdb), str(external_output),
+        "--tool", external_tool, "-b", str(bpseq_out),
+    ]
+    run_command(cmd, quiet=False)
+
+    if not bpseq_out.exists():
+        raise RuntimeError(f"adapter did not produce the expected output file: {bpseq_out}")
+    return bpseq_out
+
+
 def parse_fr3d_basepairs(basepairs_path: Path) -> list[tuple[dict, dict, str]]:
     seen = set()
     pairs = []
@@ -435,6 +451,8 @@ def get_motif_tree(
     target_chain: str | None = None,
     remove_isolated: bool = False,
     decompose_pseudoknot_free: bool = False,
+    external_tool: str | None = None,
+    external_output: Path | None = None,
 ) -> list[dict]:
     if motif_tree_path is not None:
         if remove_isolated:
@@ -499,6 +517,16 @@ def get_motif_tree(
         bpseq = BpSeq.from_file(str(fr3d_bpseq_path))
         if remove_isolated:
                     bpseq = bpseq.without_isolated()
+        if decompose_pseudoknot_free:
+            elements = load_elements_pseudoknot_free(bpseq)
+        else:
+            elements = load_elements_from_bpseq(bpseq)
+    elif external_tool is not None:
+        bpseq_path_out = run_adapter(target_pdb, external_tool, external_output)
+
+        bpseq = BpSeq.from_file(str(bpseq_path_out))
+        if remove_isolated:
+            bpseq = bpseq.without_isolated()
         if decompose_pseudoknot_free:
             elements = load_elements_pseudoknot_free(bpseq)
         else:
@@ -1077,8 +1105,11 @@ def main():
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
-        getattr(args, "decompose_pseudoknot_free", False),
+        args.annotator, args.fr3d, getattr(args, "target_chain", None), 
+        getattr(args, "remove_isolated", False),
+        getattr(args, "decompose_pseudoknot_free", False), 
+        getattr(args, "external_tool", None),
+        getattr(args, "external_output", None),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)
@@ -1133,8 +1164,11 @@ def struct_rmsd_main(workdir, kwargs):
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, getattr(args, "target_chain", None), getattr(args, "remove_isolated", False),
+        args.annotator, args.fr3d, getattr(args, "target_chain", None), 
+        getattr(args, "remove_isolated", False),
         getattr(args, "decompose_pseudoknot_free", False),
+        getattr(args, "external_tool", None),
+        getattr(args, "external_output", None),
     )
 
     usalign_bin = find_usalign_binary(args.usalign_bin)

@@ -90,6 +90,7 @@ The program performs the following steps:
 - normalized RMSD (nRMSD = RMSD / √(number of atoms used)) alongside raw RMSD, to account for motifs of different sizes
 - full descriptive statistics (mean, std, min, Q1, median, Q3, max) for RMSD, nRMSD and TM-score, both per individual motif and aggregated by motif type
 - optional pseudoknot-aware decomposition, separating pseudoknot-forming stems into their own category instead of forcing them into the standard stem/hairpin/loop scheme
+- support for interpreting output from other external annotation tools (DSSR, RNAView, BPNet, MAXIT, Barnaba, MC-Annotate, DNATCO) via rnapolis's `adapter`, for users who already have such a file
 
 ## Assumptions
 
@@ -132,7 +133,7 @@ Dot-Bracket and BPSEQ files contain only secondary structure information. They a
 
 ## Motif sources
 
-Structural motifs can be obtained from five different sources. Exactly one source must be selected; if none is given, the program defaults to **FR3D**.
+Structural motifs can be obtained from six different sources. Exactly one source must be selected; if none is given, the program defaults to **FR3D**.
 
 ## 1. FR3D (default)
 
@@ -247,6 +248,27 @@ motif list
 An externally supplied BPSEQ file describes one fixed numbering of the target as a whole. `--target-chain` has no effect with this source.
 
 ---
+
+## 6. External tool output (via adapter)
+
+```
+--external-tool fr3d --external-output basepairs_file.txt
+```
+
+```
+external tool's raw output file
+│
+▼
+adapter --tool <tool> -b ...
+│
+▼
+BPSEQ
+│
+▼
+motif list
+```
+
+Supported tools: `fr3d`, `dssr`, `rnaview`, `bpnet`, `maxit`, `barnaba`, `mc-annotate`, `dnatco`. `structRMSD` never runs any of these itself - the raw output file must already exist. This is different from `--fr3d`, which runs FR3D itself and converts its output internally; `--external-tool fr3d` is an alternative path for a FR3D output file obtained independently (e.g. with different flags, or generated elsewhere).
 
 ## Removing isolated base pairs
 
@@ -395,6 +417,8 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--bpseq` | BPSEQ secondary structure |
 | `--annotator` | detect motifs using the rnapolis annotator |
 | `--fr3d` | detect motifs using FR3D (default if no other source is given) |
+| `--external-tool` | interpret an existing output file from another external tool (`fr3d`, `dssr`, `rnaview`, `bpnet`, `maxit`, `barnaba`, `mc-annotate`, `dnatco`) via `adapter` |
+| `--external-output` | path to that tool's raw output file (used with `--external-tool`) |
 | `--remove-isolated` | drop isolated base pairs before motif detection |
 | `--decompose-pseudoknot-free` | separate pseudoknot-forming stems into their own category before the rest of the target is decomposed |
 | `--tm-threshold` | minimum accepted TM-score (default: 0.45) |
@@ -404,7 +428,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--out-summary` | output CSV containing summary statistics |
 | `--out-by-type` | output CSV containing summary statistics aggregated by motif type |
 
-Exactly one of `--motif-tree`, `--dbn`, `--bpseq`, `--annotator`, `--fr3d` may be given at a time.
+Exactly one of `--motif-tree`, `--dbn`, `--bpseq`, `--annotator`, `--fr3d`, `--external-tool` may be given at a time.
 ---
 
 ## Output files
@@ -477,7 +501,7 @@ Loop motifs are classified automatically according to the number and length of t
 
 ## Notes
 
-- Structural motifs can be obtained from FR3D, annotator, Dot-Bracket, BPSEQ, or a previously generated motif list.
+- Structural motifs can be obtained from FR3D, annotator, Dot-Bracket, BPSEQ, a previously generated motif list, or an existing output file from another external tool via `adapter`.
 - If no motif source is given, the program defaults to FR3D.
 - Dot-Bracket and BPSEQ files are used **only to identify structural motifs**.
 - RMSD is always calculated from 3D atomic coordinates stored in the target and prediction structures.

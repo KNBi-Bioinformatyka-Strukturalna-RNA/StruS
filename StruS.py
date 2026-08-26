@@ -58,6 +58,8 @@ Usage:
     parser.add_argument("-t", "--threshold", default=2, help="Number of matching nodes in the subtree to match the prediction and target in RTBS.")
     parser.add_argument("--annotator", action="store_true", help="Use the rnapolis annotator to find structural elements.")
     parser.add_argument("--fr3d", action="store_true", help="Use FR3D to find structural elements.")
+    parser.add_argument("--external-tool", choices=["fr3d", "dssr", "rnaview", "bpnet", "maxit", "barnaba", "mc-annotate", "dnatco"], default=None)
+    parser.add_argument("--external-output", type=Path, default=None)
     parser.add_argument("--dbn_rtbs", action="store_true", help="Use existing .dbn files to calculate RTBS.")
     parser.add_argument("--check_sequence_always", action="store_true", help="Require sequence compatibility when matching subtrees in RTBS, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence.")
     parser.add_argument("--remove_pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' and ')' are permanently replaced with '.'.")
