@@ -11,3 +11,5 @@ FR3D = str(SCRIPT_DIR / "fr3d-python" / "fr3d" / "classifiers" / "NA_pairwise_in
 FR3D_TO_DBN = str(SCRIPT_DIR / "fr3d_to_dbn.py")
 ANNOTATOR_TO_DBN = str(SCRIPT_DIR / "annotator_to_dbn.py")
 CONVERTER_FROM_DBN = str(SCRIPT_DIR / "converter_from_dbn.py")
+MOLECULE_FILTER = str(SCRIPT_DIR / "rnapolis-py" / "src" / "rnapolis" / "molecule_filter.py")
+RNAPOLIS_SRC = str(SCRIPT_DIR / "rnapolis-py" / "src")
