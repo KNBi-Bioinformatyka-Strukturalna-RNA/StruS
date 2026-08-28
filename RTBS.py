@@ -519,8 +519,8 @@ worst_possible = n_target * UNMATCHED_PENALTY
 penalty_range  = worst_possible - best_possible
 
 #Core processing function
-H_SPACING = 3.2
-V_SPACING = 2.5
+H_SPACING = 5.0
+V_SPACING = 4.0
 
 def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     was_cyclic = False
@@ -758,16 +758,65 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         lines = []
 
         for strand in strands:
-            first = strand.get("first")
-            last = strand.get("last")
+            chain_id = strand.get("chain_id", "")
+            first = strand.get("chain_first")
+            last = strand.get("chain_last")
             sequence = strand.get("sequence", "")
 
-            if first is not None and last is not None:
+            if chain_id and first is not None and last is not None:
+                lines.append(f"{chain_id}{first}-{chain_id}{last}: {sequence}")
+            elif first is not None and last is not None:
                 lines.append(f"{first}-{last}: {sequence}")
             elif sequence:
                 lines.append(sequence)
 
         return "\n".join(lines)
+
+    def draw_target_tree(ax_target, nodes_target, root_target, target_to_pred):
+        pos_t, _ = layout_forest(nodes_target, root_target)
+        if not pos_t:
+            return
+        xs_t = [x for x, y in pos_t.values()]
+        ys_t = [y for x, y in pos_t.values()]
+        x_min_t, x_max_t = min(xs_t), max(xs_t)
+        y_min_t, y_max_t = min(ys_t), max(ys_t)
+        ax_target.axis("off")
+        ax_target.set_xlim(x_min_t - x_pad, x_max_t + x_pad)
+        ax_target.set_ylim(y_min_t - y_pad_bottom, y_max_t + y_pad_top)
+
+        # edges
+        for nid, (x, y) in pos_t.items():
+            for child_id in nodes_target[nid].get("children", []):
+                if child_id in pos_t:
+                    cx, cy = pos_t[child_id]
+                    ax_target.plot([x, cx], [y, cy], color="#95a5a6", lw=1.2, zorder=1, alpha=0.7)
+        # nodes
+        for nid, (x, y) in pos_t.items():
+            node = nodes_target[nid]
+            name = node["name"]
+            sequence_label = node_sequence_label(node)
+            if nid in target_to_pred:
+                pred_id = target_to_pred[nid]
+                pred_name = nodes_p[pred_id]["name"]
+                match_label = f"→ {pred_name}"
+            else:
+                match_label = "→ UNMATCHED"
+            if sequence_label:
+                node_label = (
+                    f"{name}\n"
+                    f"{sequence_label}"
+                )
+            else:
+                node_label = name
+
+            label_offset = V_SPACING * 0.3
+            ax_target.text(x, y, node_label, ha="center", va="center", fontsize=15, fontweight="bold", zorder=5,
+                bbox=dict(facecolor="white", edgecolor="#2c3e50", boxstyle="round,pad=0.4", alpha=0.93, linewidth=1.1))
+            ax_target.text(x, y - label_offset, match_label, ha="center", va="top", fontsize=15, color="#34495e", zorder=6, style="italic")
+
+            if node.get("pseudoknot", False):
+                ax_target.text(x, y - label_offset - V_SPACING * 0.2, "Pseudoknot", ha="center", va="top",
+                        fontsize=14, color="#34495e", zorder=6, style="italic")
 
     #draw
     xs = [x for x, y in pos_p.values()]
@@ -778,12 +827,16 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     y_pad_top    = V_SPACING * 0.6
     y_pad_bottom = V_SPACING * 1.2
 
-    width  = max(12, (x_max - x_min + 2 * x_pad) * 0.9)
+    width  = max(18, (x_max - x_min + 2 * x_pad) * 1.8)
     height = max(7,  (y_max - y_min + y_pad_top + y_pad_bottom) * 0.85)
-    fig, ax = plt.subplots(figsize=(width, height))
+    fig, (ax_target, ax) = plt.subplots(1, 2, figsize=(width, height), gridspec_kw={"width_ratios": [1, 1]})
+    #fig.subplots_adjust(left=0.05, right=0.85, top=0.75, bottom=0.04, wspace = 0.4)
     ax.axis("off")
-    ax.set_xlim(x_min - x_pad,       x_max + x_pad)
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
     ax.set_ylim(y_min - y_pad_bottom, y_max + y_pad_top)
+
+    # draw target tree
+    draw_target_tree(ax_target, nodes_t, root_t, target_to_pred)
 
     # edges
     for nid, (x, y) in pos_p.items():
@@ -793,7 +846,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
                 ax.plot([x, cx], [y, cy], color="#95a5a6", lw=1.2, zorder=1, alpha=0.7)
 
     # nodes
-    label_offset = V_SPACING * 0.2
+    label_offset = V_SPACING * 0.25
     for nid, (x, y) in pos_p.items():
         info = node_info[nid]
         pen  = info["penalty"]
@@ -812,7 +865,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         bp   = info["bear_p"]
         node_label = f"{name}\n{sequence_label}" if sequence_label else name
 
-        ax.text(x, y, node_label, ha="center", va="center", fontsize=8,
+        ax.text(x, y, node_label, ha="center", va="center", fontsize=15,
                 fontweight="bold", zorder=5,
                 bbox=dict(facecolor=col, edgecolor="#2c3e50",
                           boxstyle="round,pad=0.4", alpha=0.93, linewidth=1.1))
@@ -820,41 +873,44 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         if not info["scored"]:
             if info["matched"]:
                 tname = nodes_t[info["target_id"]]["name"]
-                lbl = f"JUNCTION  ({tname})"
+                lbl = f"JUNCTION\n({tname})"
             else:
-                lbl = "JUNCTION  UNMATCHED"
+                lbl = "JUNCTION UNMATCHED"
 
         elif info["matched"]:
             tname = nodes_t[info["target_id"]]["name"]
-            lbl = f"pen={pen:+.2f}  BEAR: {bt}→{bp}  ({tname})"
+            lbl = f"pen={pen:+.2f}\nBEAR: {bt}→{bp}\n({tname})"
         else:
-            lbl = f"pen={UNMATCHED_PENALTY:+.2f}  UNMATCHED  BEAR: {bp}"
+            lbl = f"pen={UNMATCHED_PENALTY:+.2f}\nUNMATCHED\nBEAR: {bp}"
 
         ax.text(x, y - label_offset, lbl,
-                ha="center", va="top", fontsize=8, color="#34495e",
+                ha="center", va="top", fontsize=14, color="#34495e",
                 zorder=6, style="italic")
 
         if nodes_p[nid].get("pseudoknot", False):
-            ax.text(x, y - label_offset - V_SPACING * 0.1,
+            ax.text(x, y - label_offset - V_SPACING * 0.3,
                     "Pseudoknot",
-                    ha="center", va="top", fontsize=8, color="#34495e",
+                    ha="center", va="top", fontsize=14, color="#34495e",
                     zorder=6, style="italic")
 
+    ax_target.set_title(f"TARGET: {target_name}", fontsize=18, fontweight="bold", pad=12)
+    ax.set_title(f"PREDICTION: {pred_name}", fontsize=18, fontweight="bold", pad=12)
+
     # colorbar
-    fig.subplots_adjust(left=0.01, right=0.87, top=0.93, bottom=0.04)
-    cbar_ax = fig.add_axes([0.89, 0.20, 0.015, 0.55])
+    cbar_ax = fig.add_axes([0.5, 0.20, 0.015, 0.45])
     sm = cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cbar_ax)
-    cbar.set_label("Penalty  (−MBR score)", fontsize=8)
+    cbar.set_label("Penalty  (−MBR score)", fontsize=18)
     tick_vals = sorted({safe_vmin, safe_vmax, 0.0})
     cbar.set_ticks(tick_vals)
     cbar.set_ticklabels([f"{v:+.2f}" for v in tick_vals])
+    cbar.ax.tick_params(labelsize=15, labelcolor="black", left=True, right=False, labelleft=True, labelright=False)
     cbar_ax.text(0.5,  1.01, "worst\nmatch", ha="center", va="bottom",
-                 fontsize=9, color="#e74c3c", fontweight="bold",
+                 fontsize=14, color="#e74c3c", fontweight="bold",
                  transform=cbar_ax.transAxes)
     cbar_ax.text(0.5, -0.01, "best\nmatch", ha="center", va="top",
-                 fontsize=9, color="#2ecc71", fontweight="bold",
+                 fontsize=14, color="#2ecc71", fontweight="bold",
                  transform=cbar_ax.transAxes)
 
     # info box
@@ -887,16 +943,15 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
             f"{n_disconnected} disconnected component(s) found."
         )
         
-    ax.text(0.01, 0.99, info_txt,
-            transform=ax.transAxes, va="top", ha="left", fontsize=8,
-            family="monospace",
+    fig.text(0.5, 0.88, info_txt, va="top", ha="center", fontsize=18,
+            family="monospace", 
             bbox=dict(facecolor="white", edgecolor="#bdc3c7",
                       boxstyle="round,pad=0.5", alpha=0.88))
 
     fig.suptitle(
-        f"RNA Tree BEAR Similarity (RTBS) — Penalty Visualisation\n"
+        f"\n\nRNA Tree BEAR Similarity (RTBS) — Penalty Visualisation\n"
         f"Target: {target_name}   |   Prediction: {pred_name}",
-        fontsize=11, y=0.99)
+        fontsize=25, y=0.99, fontweight="bold")
 
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     if args.show:
@@ -904,11 +959,24 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
     plt.close(fig)
 
     # JSON report
+    def node_strands_report(node):
+        return [
+            {
+                "chain_id": strand.get("chain_id"),
+                "chain_first": strand.get("chain_first"),
+                "chain_last": strand.get("chain_last"),
+                "sequence": strand.get("sequence", ""),
+                "structure": strand.get("structure", "")
+            }
+            for strand in node.get("strands", [])
+        ]
+
     report_pred = []
     for nid, info in node_info.items():
         entry = {
             "pred_node_id":   nid,
             "pred_node_name": nodes_p[nid]["name"],
+            "pred_strands":   node_strands_report(nodes_p[nid]),
             "bear_pred":      info["bear_p"],
             "penalty":        round(info["penalty"], 4),
             "matched":        info["matched"],
@@ -918,6 +986,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
             tid = info["target_id"]
             entry["target_node_id"]   = tid
             entry["target_node_name"] = nodes_t[tid]["name"]
+            entry["target_strands"]   = node_strands_report(nodes_t[tid])
             entry["bear_target"]      = info["bear_t"]
         report_pred.append(entry)
     report_pred.sort(key=lambda x: -x["penalty"])
@@ -926,6 +995,7 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         {
             "pred_node_id": nid,
             "pred_node_name": nodes_p[nid]["name"],
+            "pred_strands": node_strands_report(nodes_p[nid]),
             "bear_pred": node_to_bear(nodes_p[nid]),
             "penalty": round(UNMATCHED_PENALTY, 4),
             "matched": False,
@@ -933,11 +1003,14 @@ def process_prediction(pred_path: pathlib.Path, out_path: pathlib.Path):
         for nid in unmatched_pred_scored_ids
     ]
     report_target_unmatched = [
-        {"target_node_id":   nid,
-         "target_node_name": nodes_t[nid]["name"],
-         "bear_target":      node_to_bear(nodes_t[nid]),
-         "penalty":          round(UNMATCHED_PENALTY, 4),
-         "matched":          False}
+        {
+            "target_node_id":   nid,
+            "target_node_name": nodes_t[nid]["name"],
+            "target_strands": node_strands_report(nodes_t[nid]),
+            "bear_target":      node_to_bear(nodes_t[nid]),
+            "penalty":          round(UNMATCHED_PENALTY, 4),
+            "matched":          False
+        }
         for nid in unmatched_target_scored_ids
     ]
 
