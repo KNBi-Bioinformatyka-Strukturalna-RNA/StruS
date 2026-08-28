@@ -2,10 +2,10 @@ import argparse
 import json
 from pathlib import Path
 
-parser = argparse.ArgumentParser(description="Convert an extended DBN structure into an RNA structural graph annotated with BEAR secondary-structure-element types.")
+parser = argparse.ArgumentParser(description="Convert an extended, multi-chain DBN structure (one '>chain_id' / sequence / structure block per chain) into an RNA structural graph annotated with BEAR secondary-structure-element types.")
 parser.add_argument("input", help="Input DBN file")
 parser.add_argument("-o", "--output", default="structure_tree.json", help="Output JSON file")
-parser.add_argument("--remove_pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' and ')' are permanently replaced with '.'.")
+parser.add_argument("--remove_pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' ')' and the internal chain-break marker are permanently replaced with '.'.")
 parser.add_argument("--remove_isolated", action="store_true", help="Remove isolated base pairs (stems of length 1) before processing the dot-bracket structure. Such pairs are replaced with '.'.")
 args = parser.parse_args()
 
@@ -16,6 +16,16 @@ BRACKET_PAIRS = [("(", ")"), ("[", "]"), ("{", "}"), ("<", ">")]
 BRACKET_PAIRS += [(chr(ord("A") + i), chr(ord("a") + i)) for i in range(26)]
 OPEN_TO_CLOSE = dict(BRACKET_PAIRS)
 CLOSE_TO_OPEN = {close: opening for opening, close in BRACKET_PAIRS}
+
+# Internal marker used to glue chains together into one global sequence/structure
+# string, so the rest of the algorithm (bracket matching, stem/loop detection)
+# can keep working position-by-position exactly as before. It is never allowed
+# to appear inside a chain's own sequence (see read_dbn).
+CHAIN_BREAK = "&"
+
+# Populated by read_dbn()/main(): list of {"id", "start", "end"} describing
+# where each chain lives in the global (concatenated) 1-indexed sequence.
+CHAINS = []
 
 def read_dbn(path):
     if not path.is_file():
@@ -28,24 +38,80 @@ def read_dbn(path):
             lines = [line.strip() for line in f if line.strip()]
     except OSError as e:
         raise ValueError(f"Cannot read input file '{path}': {e}")
-    
-    if len(lines) != 3:
-        raise ValueError(f"Invalid DBN file '{path}': expected exactly 3 non-empty lines (header, sequence, structure), found {len(lines)}")
-    if not lines[0].startswith(">"):
-        raise ValueError(f"Invalid DBN header in '{path}': first line must start with '>'")
 
-    sequence = lines[1].upper()
-    structure = lines[2]
-    invalid_bases = set(sequence) - set("ACGUT")
-    if invalid_bases:
-        raise ValueError(f"Invalid nucleotide(s) in '{path}': {', '.join(sorted(invalid_bases))}")
-    if len(sequence) != len(structure):
-        raise ValueError(f"Sequence and structure have different lengths in '{path}': {len(sequence)} != {len(structure)}")
+    if not lines:
+        raise ValueError(f"Invalid DBN file '{path}': file is empty")
 
-    return sequence, structure
+    chain_blocks = []
+    i = 0
+    while i < len(lines):
+        header = lines[i]
+        if not header.startswith(">"):
+            raise ValueError(
+                f"Invalid DBN file '{path}': expected a header line starting "
+                f"with '>' at line {i + 1}, got: {header!r}"
+            )
+        if i + 2 >= len(lines):
+            raise ValueError(
+                f"Invalid DBN file '{path}': block for header {header!r} is "
+                "truncated, expected a sequence line and a structure line to follow"
+            )
+
+        chain_id = header[1:].strip()
+        if not chain_id:
+            raise ValueError(f"Invalid DBN header in '{path}' at line {i + 1}: chain id is empty")
+
+        chain_sequence = lines[i + 1].upper()
+        chain_structure = lines[i + 2]
+
+        invalid_bases = set(chain_sequence) - set("ACGUT")
+        if invalid_bases:
+            raise ValueError(
+                f"Invalid nucleotide(s) in chain '{chain_id}' in '{path}': "
+                f"{', '.join(sorted(invalid_bases))}"
+            )
+        if len(chain_sequence) != len(chain_structure):
+            raise ValueError(
+                f"Sequence and structure have different lengths for chain "
+                f"'{chain_id}' in '{path}': {len(chain_sequence)} != {len(chain_structure)}"
+            )
+
+        chain_blocks.append((chain_id, chain_sequence, chain_structure))
+        i += 3
+
+    if not chain_blocks:
+        raise ValueError(f"Invalid DBN file '{path}': no chain blocks found")
+
+    seen_ids = set()
+    for chain_id, _, _ in chain_blocks:
+        if chain_id in seen_ids:
+            raise ValueError(f"Duplicate chain id '{chain_id}' in '{path}'")
+        seen_ids.add(chain_id)
+
+    sequence_parts = []
+    structure_parts = []
+    chains = []
+    global_pos = 1
+    for index, (chain_id, chain_sequence, chain_structure) in enumerate(chain_blocks):
+        if index > 0:
+            sequence_parts.append(CHAIN_BREAK)
+            structure_parts.append(CHAIN_BREAK)
+            global_pos += 1
+
+        start = global_pos
+        end = start + len(chain_sequence) - 1
+        sequence_parts.append(chain_sequence)
+        structure_parts.append(chain_structure)
+        chains.append({"id": chain_id, "start": start, "end": end})
+        global_pos = end + 1
+
+    sequence = "".join(sequence_parts)
+    structure = "".join(structure_parts)
+
+    return sequence, structure, chains
 
 def remove_pseudoknots(structure):
-    return "".join(char if char in "()" else "." for char in structure)
+    return "".join(char if char in "()" + CHAIN_BREAK else "." for char in structure)
 
 def remove_isolated_pairs(structure):
     pairs = get_pairs(structure)
@@ -66,7 +132,7 @@ def get_pairs(structure):
     stacks = {opening: [] for opening, _ in BRACKET_PAIRS}
     pairs = []
     for position, char in enumerate(structure, start=1):
-        if char == ".":
+        if char == "." or char == CHAIN_BREAK:
             continue
         if char in OPEN_TO_CLOSE:
             stacks[char].append(position)
@@ -147,13 +213,51 @@ def assign_loop_children(stems):
 
     return stems
 
+def find_chain(position):
+    for chain in CHAINS:
+        if chain["start"] <= position <= chain["end"]:
+            return chain
+
+    return None
+
 def make_strand(first, last, sequence, structure):
+    """
+    Build strand fragment(s) covering the inclusive global position range
+    [first, last]. If the range crosses one or more chain breaks, it is
+    split into one fragment per chain, so no fragment's sequence/structure
+    ever contains the internal chain-break marker. Each fragment carries
+    both its global position (first/last) and its chain id + local,
+    within-chain nucleotide numbering (chain_first/chain_last). Returns a
+    list (possibly empty, e.g. if the range is empty or is only a break).
+    """
     if first > last:
-        return None
+        return []
     if first < 1 or last > len(sequence):
         raise ValueError(f"Invalid strand range: {first}-{last}")
 
-    return {"first": first, "last": last, "sequence": sequence[first - 1:last], "structure": structure[first - 1:last]}
+    strands = []
+    segment_start = first
+    for position in range(first, last + 1):
+        if sequence[position - 1] == CHAIN_BREAK:
+            if segment_start <= position - 1:
+                strands.append(_build_strand_fragment(segment_start, position - 1, sequence, structure))
+            segment_start = position + 1
+    if segment_start <= last:
+        strands.append(_build_strand_fragment(segment_start, last, sequence, structure))
+
+    return strands
+
+def _build_strand_fragment(first, last, sequence, structure):
+    chain = find_chain(first)
+    return {
+        "first": first,
+        "last": last,
+        "chain_id": chain["id"] if chain else None,
+        "chain_first": first - chain["start"] + 1 if chain else None,
+        "chain_last": last - chain["start"] + 1 if chain else None,
+        "sequence": sequence[first - 1:last],
+        "structure": structure[first - 1:last],
+    }
 
 def add_element(elements, name, bear_type, strands, branching=False, extra=None):
     element_id = len(elements) + 1
@@ -177,8 +281,8 @@ def classify_loop_for_stem(stem_index, stems, sequence, structure):
     children = [i for i, child in enumerate(stems) if child["loop_parent"] == stem_index]
     children.sort(key=lambda i: stems[i]["left_first"])
     if not children:
-        strand = make_strand(loop_start, loop_end, sequence, structure)
-        return {"type": "Hairpin", "branching": False, "strands": [strand] if strand else [], "children": []}
+        strands = make_strand(loop_start, loop_end, sequence, structure)
+        return {"type": "Hairpin", "branching": False, "strands": strands, "children": []}
 
     crossing_children = [i for i in children if stems_cross(stem, stems[i])]
     if len(children) == 1 and not crossing_children:
@@ -254,7 +358,9 @@ def build_secondary_structure_graph(sequence, structure):
     if not pairs:
         if not sequence:
             return []
-        add_element(elements, "SingleStrand 1", "Unclassified", [make_strand(1, len(sequence), sequence, structure)])
+        strands = make_strand(1, len(sequence), sequence, structure)
+        if strands:
+            add_element(elements, "SingleStrand 1", "Unclassified", strands)
         return elements
 
     stems = find_stems(pairs)
@@ -262,7 +368,8 @@ def build_secondary_structure_graph(sequence, structure):
     stem_element_id = {}
     stem_branching = [False for _ in stems]
     for index, stem in enumerate(stems):
-        stem_element_id[index] = add_element(elements, f"Stem {index + 1}", "Stem", [make_strand(stem["left_first"], stem["left_last"], sequence, structure), make_strand(stem["right_first"], stem["right_last"], sequence, structure)], extra={"pseudoknot": False})
+        stem_strands = make_strand(stem["left_first"], stem["left_last"], sequence, structure) + make_strand(stem["right_first"], stem["right_last"], sequence, structure)
+        stem_element_id[index] = add_element(elements, f"Stem {index + 1}", "Stem", stem_strands, extra={"pseudoknot": False})
 
     counters = {"Hairpin": 0, "BulgeLeft": 0, "BulgeRight": 0, "LeftInternalLoop": 0, "RightInternalLoop": 0, "Junction": 0}
     for index in range(len(stems)):
@@ -279,7 +386,11 @@ def build_secondary_structure_graph(sequence, structure):
             for child_index in motif["children"]:
                 stem_branching[child_index] = True
             counters["Junction"] += 1
-            junction_id = add_element(elements, f"Junction {counters['Junction']}", "Junction", [make_strand(segment[0], segment[1], sequence, structure) for segment in motif["segments"] if segment[0] <= segment[1]], branching=True)
+            junction_strands = []
+            for segment in motif["segments"]:
+                if segment[0] <= segment[1]:
+                    junction_strands.extend(make_strand(segment[0], segment[1], sequence, structure))
+            junction_id = add_element(elements, f"Junction {counters['Junction']}", "Junction", junction_strands, branching=True)
             link(elements, stem_element_id[index], junction_id)
             for child_index in motif["children"]:
                 link(elements, junction_id, stem_element_id[child_index])
@@ -294,8 +405,8 @@ def build_secondary_structure_graph(sequence, structure):
         if motif_type == "BulgeLeft":
             counters["BulgeLeft"] += 1
             segment = motif["segments"][0]
-            strand = make_strand(segment[1], segment[2], sequence, structure)
-            bulge_id = add_element(elements, f"BulgeLeft {counters['BulgeLeft']}", "BULGELEFT", [strand])
+            strands = make_strand(segment[1], segment[2], sequence, structure)
+            bulge_id = add_element(elements, f"BulgeLeft {counters['BulgeLeft']}", "BULGELEFT", strands)
             link(elements, stem_element_id[index], bulge_id)
             child_index = motif["children"][0]
             link(elements, bulge_id, stem_element_id[child_index])
@@ -304,8 +415,8 @@ def build_secondary_structure_graph(sequence, structure):
         if motif_type == "BulgeRight":
             counters["BulgeRight"] += 1
             segment = motif["segments"][0]
-            strand = make_strand(segment[1], segment[2], sequence, structure)
-            bulge_id = add_element(elements, f"BulgeRight {counters['BulgeRight']}", "BULGERIGHT", [strand])
+            strands = make_strand(segment[1], segment[2], sequence, structure)
+            bulge_id = add_element(elements, f"BulgeRight {counters['BulgeRight']}", "BULGERIGHT", strands)
             link(elements, stem_element_id[index], bulge_id)
             child_index = motif["children"][0]
             link(elements, bulge_id, stem_element_id[child_index])
@@ -315,12 +426,12 @@ def build_secondary_structure_graph(sequence, structure):
             child_index = motif["children"][0]
             left_segment = motif["segments"][0]
             right_segment = motif["segments"][1]
-            left_strand = make_strand(left_segment[1], left_segment[2], sequence, structure)
-            right_strand = make_strand(right_segment[1], right_segment[2], sequence, structure)
+            left_strands = make_strand(left_segment[1], left_segment[2], sequence, structure)
+            right_strands = make_strand(right_segment[1], right_segment[2], sequence, structure)
             counters["LeftInternalLoop"] += 1
-            left_id = add_element(elements, f"LeftInternalLoop {counters['LeftInternalLoop']}", "LEFTINTERNALLOOP", [left_strand])
+            left_id = add_element(elements, f"LeftInternalLoop {counters['LeftInternalLoop']}", "LEFTINTERNALLOOP", left_strands)
             counters["RightInternalLoop"] += 1
-            right_id = add_element(elements, f"RightInternalLoop {counters['RightInternalLoop']}", "RIGHTINTERNALLOOP", [right_strand])
+            right_id = add_element(elements, f"RightInternalLoop {counters['RightInternalLoop']}", "RIGHTINTERNALLOOP", right_strands)
             link(elements, stem_element_id[index], left_id)
             link(elements, left_id, right_id)
             link(elements, right_id, stem_element_id[child_index])
@@ -339,7 +450,10 @@ def build_secondary_structure_graph(sequence, structure):
         inside_structure = any(stem["left_first"] < first and last < stem["right_last"] for stem in stems)
         if inside_structure:
             continue
-        add_element(elements, f"SingleStrand {single_id}", "Unclassified", [make_strand(first, last, sequence, structure)])
+        strands = make_strand(first, last, sequence, structure)
+        if not strands:
+            continue
+        add_element(elements, f"SingleStrand {single_id}", "Unclassified", strands)
         single_id += 1
 
     return chain_top_level(elements)
@@ -391,7 +505,8 @@ def add_pseudoknots(elements, sequence, original_structure, normal_stem_count):
             continue
         source_elements.sort(key=lambda element_id: element_start_position(elements[element_id - 1]))
         stem_number = normal_stem_count + pk_index
-        pk_element_id = add_element(elements, f"Stem {stem_number}", "Stem", [make_strand(stem["left_first"], stem["left_last"], sequence, original_structure), make_strand(stem["right_first"], stem["right_last"], sequence, original_structure)], extra={"pseudoknot": True})
+        pk_strands = make_strand(stem["left_first"], stem["left_last"], sequence, original_structure) + make_strand(stem["right_first"], stem["right_last"], sequence, original_structure)
+        pk_element_id = add_element(elements, f"Stem {stem_number}", "Stem", pk_strands, extra={"pseudoknot": True})
         for source_id in source_elements:
             link(elements, source_id, pk_element_id)
 
@@ -412,8 +527,10 @@ def build_structure_graph(sequence, structure, remove_pseudoknots_flag=False):
     return graph
 
 def main():
+    global CHAINS
     try:
-        sequence, structure = read_dbn(INPUT)
+        sequence, structure, chains = read_dbn(INPUT)
+        CHAINS = chains
         if args.remove_isolated:
             structure = remove_isolated_pairs(structure)
         graph = build_structure_graph(sequence, structure, remove_pseudoknots_flag=args.remove_pseudoknots)
@@ -425,6 +542,10 @@ def main():
     except (ValueError, OSError, json.JSONDecodeError) as e:
         parser.error(str(e))
 
+    print(f"Chains: {len(CHAINS)}")
+    for chain in CHAINS:
+        length = chain["end"] - chain["start"] + 1
+        print(f"  - {chain['id']}: {length} nt (global positions {chain['start']}-{chain['end']})")
     print(f"Saved {OUTPUT}")
 
 if __name__ == "__main__":

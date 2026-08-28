@@ -13,10 +13,17 @@ from Bio.PDB.Model import Model as PDBModel
 from Bio.PDB.Chain import Chain as PDBChain
 from structRMSD import struct_rmsd_main
 from config import (PYTHON_BIN, ANNOTATOR, CONVERTER, RTBS, MBR, FR3D, FR3D_TO_DBN, CONVERTER_FROM_DBN, ANNOTATOR_TO_DBN, MOLECULE_FILTER, RNAPOLIS_SRC)
-if str(RNAPOLIS_SRC) not in sys.path:
-    sys.path.insert(0, str(RNAPOLIS_SRC))
 
-from rnapolis.parser_v2 import parse_pdb_atoms, write_cif
+# --- Previous approach: convert raw .pdb input to mmCIF (via rnapolis
+# parser_v2) so molecule-filter (which requires mmCIF input) could run on
+# .pdb files directly. Superseded by requiring .cif input explicitly for
+# --filter-rna-target/--filter-rna-prediction (see filter_pdb below).
+# Commented out, not removed - kept for reference / possible future reuse.
+#
+# if str(RNAPOLIS_SRC) not in sys.path:
+#     sys.path.insert(0, str(RNAPOLIS_SRC))
+#
+# from rnapolis.parser_v2 import parse_pdb_atoms, write_cif
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -70,7 +77,10 @@ Usage:
     parser.add_argument("--annotator", action="store_true", help="Use the rnapolis annotator to find structural elements.")
     parser.add_argument("--fr3d", action="store_true", help="Use FR3D to find structural elements.")
     parser.add_argument("--dbn_rtbs", action="store_true", help="Use existing .dbn files to calculate RTBS.")
-    parser.add_argument("--filter-rna", action="store_true", help="Before running the annotator/FR3D, filter input PDB structures with the rnapolis molecule-filter tool, keeping only polyribonucleotide chains. Input PDB files are internally converted to mmCIF (via rnapolis parser_v2) since molecule-filter requires mmCIF input; the filtered output is written back out as .pdb for the rest of the pipeline. Not applicable with --dbn_rtbs.")
+    # Superseded by --filter-rna-target / --filter-rna-prediction below. Commented out, not removed - kept for reference.
+    # parser.add_argument("--filter-rna", action="store_true", help="Before running the annotator/FR3D, filter input PDB structures with the rnapolis molecule-filter tool, keeping only polyribonucleotide chains. Input PDB files are internally converted to mmCIF (via rnapolis parser_v2) since molecule-filter requires mmCIF input; the filtered output is written back out as .pdb for the rest of the pipeline. Not applicable with --dbn_rtbs.")
+    parser.add_argument("--filter-rna-target", action="store_true", help="Filter the target structure with the rnapolis molecule-filter tool, keeping only polyribonucleotide chains, before running any tool. The target must be given as a .cif (mmCIF) file (molecule-filter requires mmCIF input) - passing a .pdb target together with this switch is an error. The filtered output is written back out as .pdb and used for the rest of the pipeline (RTBS and/or structRMSD). Not applicable with --dbn_rtbs.")
+    parser.add_argument("--filter-rna-prediction", action="store_true", help="Same as --filter-rna-target, but for the prediction file (or every file found via -p/--pred_dir). Prediction(s) must be given as .cif (mmCIF) files - passing .pdb prediction(s) together with this switch is an error. Can be used independently of --filter-rna-target, e.g. to filter a .cif target while passing an already-suitable .pdb prediction without this switch (or vice versa).")
     parser.add_argument("--check_sequence_always", action="store_true", help="Require sequence compatibility when matching subtrees in RTBS, not only when matching remaining single nodes. Prevents accidental matching of similar nodes. Only possible for target comparison and prediction for the same sequence.")
     parser.add_argument("--remove-pseudoknots", action="store_true", help="Remove pseudoknots before processing. All characters other than '(' and ')' are permanently replaced with '.'.")
     parser.add_argument("--remove-isolated", action="store_true", help="Remove isolated base pairs (stems of length 1) before processing the dot-bracket structure. Such pairs are permanently replaced with '.'.")
@@ -120,6 +130,18 @@ def check_dbn(path):
         raise FileNotFoundError(path)
     if path.suffix.lower() != ".dbn":
         raise ValueError(f"{path} is not a .dbn file")
+    return path
+
+
+def check_cif(path):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if path.suffix.lower() not in (".cif", ".mmcif"):
+        raise ValueError(
+            f"{path} is not a .cif file. --filter-rna-target/--filter-rna-prediction require mmCIF (.cif) "
+            "input for molecule-filter; run without that switch to use .pdb input instead."
+        )
     return path
 
 
@@ -182,11 +204,8 @@ def apply_chain_mapping(
 def remap_pdb_chains(pdb_file, chain_mapping, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_pdb = output_dir / pdb_file.name
-    logical_chains = chain_mapping.get(pdb_file.stem)
+    logical_chains = chain_mapping.get(pdb_file.name)
     if logical_chains is None:
-        # No mapping entry for this file: pass it through unchanged so it
-        # still ends up alongside the remapped files (needed when the rest
-        # of the pipeline reads from a single directory, e.g. -p pred_dir).
         shutil.copy(pdb_file, out_pdb)
         return out_pdb
     apply_chain_mapping(pdb_file, logical_chains, out_pdb)
@@ -194,20 +213,25 @@ def remap_pdb_chains(pdb_file, chain_mapping, output_dir):
     return out_pdb
 
 
-def convert_to_cif(pdb_file, output_dir):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_cif = output_dir / f"{pdb_file.stem}.cif"
-    with open(pdb_file) as f:
-        atoms_df = parse_pdb_atoms(f)
-    write_cif(atoms_df, str(out_cif))
-    print("Converted to CIF")
-    return out_cif
+# --- Previous approach: parse a raw .pdb file and write it out as mmCIF via
+# rnapolis parser_v2, so molecule-filter could then be run on the conversion
+# result. Commented out, not removed - kept for reference / possible future
+# reuse. See the matching commented-out import at the top of this file.
+#
+# def convert_to_cif(pdb_file, output_dir):
+#     output_dir.mkdir(parents=True, exist_ok=True)
+#     out_cif = output_dir / f"{pdb_file.stem}.cif"
+#     with open(pdb_file) as f:
+#         atoms_df = parse_pdb_atoms(f)
+#     write_cif(atoms_df, str(out_cif))
+#     print("Converted to CIF")
+#     return out_cif
 
 
-def filter_pdb(pdb_file, output_dir):
+def filter_pdb(cif_file, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
-    cif_file = convert_to_cif(pdb_file, output_dir)
-    out_pdb = output_dir / pdb_file.name
+    out_pdb = output_dir / f"{cif_file.stem}.pdb"
+    # cif_file = convert_to_cif(pdb_file, output_dir)  # no longer needed: input is required to already be .cif
     cmd = [PYTHON_BIN, MOLECULE_FILTER, "--filter-by-poly-types", "polyribonucleotide", "--pdb", str(cif_file)]
     print("Running:")
     print(" ".join(map(str, cmd)))
@@ -222,9 +246,9 @@ def filter_pdb(pdb_file, output_dir):
 
     if not any(line.startswith(("ATOM", "HETATM")) for line in lines):
         raise RuntimeError(
-            f"molecule-filter did not produce a valid filtered structure for {pdb_file} "
+            f"molecule-filter did not produce a valid filtered structure for {cif_file} "
             f"(output {out_pdb} contains no ATOM/HETATM records, only e.g. 'END'). "
-            "It is recommended to run this tool without the --filter-rna switch for this file."
+            "It is recommended to run this tool without --filter-rna-target/--filter-rna-prediction for this file."
         )
 
     print("Filtered")
@@ -313,23 +337,30 @@ def run_structRMSD(args, output_dir):
     struct_rmsd_main(output_dir, args)
 
 
-def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", check_sequence_always=False, remove_pseudoknots = False, remove_isolated = False, threshold = 2, filter_rna = False):
+def execute_rtbs(target, predictions, pred_dir, workdir, mbr, source="fr3d", check_sequence_always=False, remove_pseudoknots = False, remove_isolated = False, threshold = 2):
     print("\n=====RTBS=====")
     rtbs_dir = workdir / "RTBS_results"
 
-    if filter_rna and source in ("annotator", "fr3d"):
-        print("\nFiltering PDB files (molecule-filter, polyribonucleotide only):")
-        filtered_dir = workdir / "filtered"
-        filtered_target_dir = filtered_dir / "target"
-
-        print(f"\nFiltering target {target.name}:")
-        target = filter_pdb(target, filtered_target_dir)
-
-        filtered_predictions = []
-        for pred in predictions:
-            print(f"\nFiltering prediction {pred.name}:")
-            filtered_predictions.append(filter_pdb(pred, filtered_dir))
-        predictions = filtered_predictions
+    # --- Previous approach: filter raw .pdb target/predictions in-place
+    # here (RTBS-only), converting them to mmCIF internally right before
+    # annotating them. Superseded by filtering target/predictions once,
+    # upfront in main() from user-supplied .cif input, so the filtered
+    # .pdb is shared by both RTBS and structRMSD. Commented out, not
+    # removed - kept for reference.
+    #
+    # if filter_rna and source in ("annotator", "fr3d"):
+    #     print("\nFiltering PDB files (molecule-filter, polyribonucleotide only):")
+    #     filtered_dir = workdir / "filtered"
+    #     filtered_target_dir = filtered_dir / "target"
+    #
+    #     print(f"\nFiltering target {target.name}:")
+    #     target = filter_pdb(target, filtered_target_dir)
+    #
+    #     filtered_predictions = []
+    #     for pred in predictions:
+    #         print(f"\nFiltering prediction {pred.name}:")
+    #         filtered_predictions.append(filter_pdb(pred, filtered_dir))
+    #     predictions = filtered_predictions
 
     if source == "annotator":
         annotator_dir = workdir / "annotated_rnapolis"
@@ -415,20 +446,24 @@ def main():
     if args.tool == "BOTH" and rtbs_source == "dbn":
         raise RuntimeError("--dbn_rtbs cannot be combined with BOTH: structRMSD needs .pdb structures while RTBS --dbn_rtbs needs .dbn files.")
 
-    if args.filter_rna and args.tool == "BOTH":
-        raise RuntimeError("--filter-rna cannot be combined with BOTH: it filters the .pdb files used for RTBS in place, which would also affect the .pdb files structRMSD expects to receive unfiltered.")
-
-    if args.filter_rna and args.dbn_rtbs:
-        raise RuntimeError("--filter-rna cannot be combined with --dbn_rtbs: no raw structure files are used in that mode.")
+    if (args.filter_rna_target or args.filter_rna_prediction) and args.dbn_rtbs:
+        raise RuntimeError("--filter-rna-target/--filter-rna-prediction cannot be combined with --dbn_rtbs: molecule-filter needs .cif structure files, not .dbn files.")
 
     if args.chain_mapping and args.dbn_rtbs:
         raise RuntimeError("--chain-mapping cannot be combined with --dbn_rtbs: chain remapping operates on .pdb structures, not .dbn files.")
 
     dbn_mode = args.tool == "RTBS" and rtbs_source == "dbn"
-    check_file = check_dbn if dbn_mode else check_pdb
-    glob_pattern = "*.dbn" if dbn_mode else "*.pdb"
 
-    target = check_file(args.target)
+    target_check_file = check_cif if args.filter_rna_target else (check_dbn if dbn_mode else check_pdb)
+
+    if args.filter_rna_prediction:
+        prediction_check_file = check_cif
+        glob_pattern = "*.cif"
+    else:
+        prediction_check_file = check_dbn if dbn_mode else check_pdb
+        glob_pattern = "*.dbn" if dbn_mode else "*.pdb"
+
+    target = target_check_file(args.target)
     mbr_path = Path(args.mbr)
     pred_dir = None 
 
@@ -442,19 +477,39 @@ def main():
             raise RuntimeError(f"No {glob_pattern} files found in prediction directory")
 
     elif args.prediction:
-        predictions = [check_file(args.prediction)]
+        predictions = [prediction_check_file(args.prediction)]
 
     else:
         raise RuntimeError("Provide a prediction file or -p prediction_folder")
 
+    if args.filter_rna_target:
+        print("\nFiltering target (molecule-filter, polyribonucleotide only):")
+        filtered_target_dir = workdir / "filtered" / "target"
+        target = filter_pdb(target, filtered_target_dir)
+        args.target = str(target)
+
+    if args.filter_rna_prediction:
+        print("\nFiltering predictions (molecule-filter, polyribonucleotide only):")
+        filtered_pred_dir = workdir / "filtered" / "predictions"
+        predictions = [filter_pdb(pred, filtered_pred_dir) for pred in predictions]
+        if pred_dir is not None:
+            pred_dir = filtered_pred_dir
+            args.pred_dir = str(filtered_pred_dir)
+        else:
+            args.prediction = str(predictions[0])
+
     if args.chain_mapping:
-        # dbn_mode is always False here (checked above: --chain-mapping
-        # cannot be combined with --dbn_rtbs), so target/predictions are .pdb.
         print("\nRemapping chains according to --chain-mapping:")
         chain_mapping = parse_chain_mapping(args.chain_mapping)
         chain_mapped_dir = workdir / "chain_mapped"
-
-        target = remap_pdb_chains(target, chain_mapping, chain_mapped_dir / "target")
+        if chain_mapping is None:
+            raise ValueError("This is not a correct chain mapping pattern!")
+        if "t" in chain_mapping:
+            target_out_dir = chain_mapped_dir / "target"
+            target_out_dir.mkdir(parents=True, exist_ok=True)
+            target = apply_chain_mapping(
+                target, chain_mapping["t"], target_out_dir / target.name
+            )
         args.target = str(target)
 
         if pred_dir is None:
@@ -469,13 +524,13 @@ def main():
     if args.tool is None:
         if not mbr_path.is_file():
             raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold, filter_rna=args.filter_rna)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold)
         execute_struct_rmsd(args, workdir)
 
     elif args.tool == "RTBS":
         if not mbr_path.is_file():
             raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold, filter_rna=args.filter_rna)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold)
         
     elif args.tool == "structRMSD":
         execute_struct_rmsd(args, workdir)
@@ -483,7 +538,7 @@ def main():
     elif args.tool == "BOTH":
         if not mbr_path.is_file():
             raise FileNotFoundError(f"MBR matrix file not found: {mbr_path}")
-        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold, filter_rna=args.filter_rna)
+        execute_rtbs(target, predictions, pred_dir, workdir, args.mbr, source=rtbs_source, check_sequence_always=args.check_sequence_always, remove_pseudoknots = args.remove_pseudoknots, remove_isolated=args.remove_isolated, threshold=args.threshold)
         execute_struct_rmsd(args, workdir)
 
 
