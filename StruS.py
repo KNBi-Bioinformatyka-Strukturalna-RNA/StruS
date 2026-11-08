@@ -73,6 +73,7 @@ Usage:
     parser.add_argument("--target-chain", type=str, default=None)
     parser.add_argument("--prediction-chain", type=str, default=None)
     parser.add_argument("--chain-mapping", type=str, default=None)
+    parser.add_argument("--unify-files", action="store_true")
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))

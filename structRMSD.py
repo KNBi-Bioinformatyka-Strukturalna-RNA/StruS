@@ -22,6 +22,7 @@ from rnapolis.common import BpSeq, DotBracket
 from config import ANNOTATOR, PYTHON_BIN
 
 MIN_RESIDUES_FOR_TM_SCORE = 3
+UNIFIED_DIR = Path("unified")
 
 CANONICAL_BASE_PAIRS = {
     frozenset({"A", "U"}),
@@ -67,6 +68,7 @@ def parse_args():
     parser.add_argument("--remove-isolated", action="store_true")
     parser.add_argument("--decompose-pseudoknot-free", action="store_true")
     parser.add_argument("--chain-mapping", type=str, default=None)
+    parser.add_argument("--unify-files", action="store_true")
     parser.add_argument("--tm-threshold", type=float, default=0.45)
     parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--usalign-bin", type=str, default=None)
@@ -354,6 +356,24 @@ def run_adapter(target_pdb: Path, external_tool: str, external_output: Path) -> 
     return bpseq_out
 
 
+def run_unifier(target_pdb: Path, prediction_paths: list[Path], unified_output: Path) -> tuple[Path, list[Path]]:
+    all_paths = [target_pdb] + prediction_paths
+
+    cmd = [
+        "unifier", *[str(p) for p in all_paths], "--output", str(unified_output)
+    ]
+    run_command(cmd, quiet=False)
+
+    unified_target = unified_output / Path(target_pdb.name)
+    unified_predictions = [unified_output / Path(p.name) for p in prediction_paths]
+
+    for path in [unified_target] + unified_predictions:
+        if not path.exists():
+            raise RuntimeError(f"unifier did not produce the expected output file: {path}")
+
+    return unified_target, unified_predictions
+
+
 def parse_fr3d_basepairs(basepairs_path: Path) -> list[tuple[dict, dict, str]]:
     seen = set()
     pairs = []
@@ -576,6 +596,7 @@ def get_chain_ids(pdb_path: Path) -> list[str]:
     model = next(iter(structure))
     return [chain.id for chain in model]
 
+
 def announce_chains(label: str, chain_ids: list[str], flag_name: str) -> None:
     if len(chain_ids) > 1:
         print(
@@ -599,6 +620,43 @@ def extract_single_chain(pdb_path: Path, chain_id: str) -> Path:
     io.save(str(out_path), _ChainSelector())
     return out_path
 
+
+def get_residue_names(pdb_path):
+    _model, index_to_residue = load_structure(pdb_path)
+    names = []
+    for residue in index_to_residue.values():
+        name = residue.get_resname().strip()
+        if name in {"A", "C", "G", "U"}:
+            names.append(name)
+    return names
+
+def filter_compatible_predictions(target_pdb: Path, prediction_paths: list[Path]) -> list[Path]:
+    compatible = []
+    target_names = get_residue_names(target_pdb)
+    target_length = len(target_names)
+
+    for path in prediction_paths:
+        pred_names = get_residue_names(path)
+        pred_length = len(pred_names)
+
+        if pred_length != target_length:
+            print(
+                f"[skipped] {path.name}: {pred_length} residues, "
+                f"target has {target_length}"
+            )
+            continue
+
+        for i in range(target_length):
+            if pred_names[i] != target_names[i]:
+                print(
+                    f"[skipped] {path.name}: residue {i + 1} is {pred_names[i]}, "
+                    f"target has {target_names[i]}"
+                )
+                break
+        else:
+            compatible.append(path)
+
+    return compatible
 
 def resolve_target_pdb(
     target_pdb: Path,
@@ -1158,9 +1216,24 @@ def main():
         prediction_paths, getattr(args, "prediction_chain", None)
     )
 
+    prediction_paths = filter_compatible_predictions(target_pdb, prediction_paths)
+    if not prediction_paths:
+        print("No predictions compatible with the target - nothing to unify, no output created.")
+        return
+
+    unified_target, unified_predictions = run_unifier(target_pdb, prediction_paths, UNIFIED_DIR)
+
+    if getattr(args, "unify_files", None):
+        print(f"Saved unified target and predictions to {UNIFIED_DIR}. You can now use an external tool on the unified target file. " 
+              "If you use these files in a second run of the program, do not use --chain-mapping or --target/prediction-chain anymore.")
+        return
+
+    target_pdb = unified_target
+    prediction_paths = unified_predictions
+
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,
-        args.annotator, args.fr3d, getattr(args, "target_chain", None), 
+        args.annotator, args.fr3d, getattr(args, "target_chain", None),
         getattr(args, "remove_isolated", False),
         getattr(args, "decompose_pseudoknot_free", False), 
         getattr(args, "external_tool", None),
@@ -1217,6 +1290,22 @@ def struct_rmsd_main(workdir, kwargs):
     prediction_paths = resolve_prediction_chains(
         prediction_paths, getattr(args, "prediction_chain", None)
     )
+
+    prediction_paths = filter_compatible_predictions(target_pdb, prediction_paths)
+    if not prediction_paths:
+        print("No predictions compatible with the target - nothing to unify, no output created.")
+        return
+
+    unified_dir = Path(workdir) / UNIFIED_DIR
+    unified_target, unified_predictions = run_unifier(target_pdb, prediction_paths, unified_dir)
+
+    if getattr(args, "unify_files", False):
+        print(f"Saved unified target and predictions to {unified_dir}. You can now use an external tool on the unified target file. " 
+              "If you use these files in a second run of the program, do not use --chain-mapping or --target/prediction-chain anymore.")
+        return
+
+    target_pdb = unified_target
+    prediction_paths = unified_predictions
 
     motif_tree = get_motif_tree(
         target_pdb, args.motif_tree, args.dbn, args.bpseq,

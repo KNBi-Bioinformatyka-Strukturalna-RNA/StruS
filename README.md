@@ -91,13 +91,14 @@ The program performs the following steps:
 - full descriptive statistics (mean, std, min, Q1, median, Q3, max) for RMSD, nRMSD and TM-score, both per individual motif and aggregated by motif type
 - optional pseudoknot-aware decomposition, separating pseudoknot-forming stems into their own category instead of forcing them into the standard stem/hairpin/loop scheme
 - support for interpreting output from other external annotation tools (DSSR, RNAView, BPNet, MAXIT, Barnaba, MC-Annotate, DNATCO) via rnapolis's `adapter`, for users who already have such a file
+- automatic unification of the target and prediction files (`unifier` from rnapolis) before the analysis, plus a mode (`--unify-files`) that only produces the unified files
 
 ## Assumptions
 
 structRMSD assumes that:
 
 - each execution analyses **one reference RNA structure (target)**;
-- residue numbering is identical between the target and every prediction;
+- the target and every prediction describe the same residues in the same order, so that the n-th residue of the target corresponds to the n-th residue of the prediction;
 - corresponding residues represent the same nucleotides.
 
 The program matches atoms using
@@ -106,11 +107,11 @@ The program matches atoms using
 (residue_id, atom_name)
 ```
 
-and therefore does **not** perform sequence alignment or residue renumbering automatically.
+where `residue_id` is the position of the residue in the file (counted from 1 across all chains, ignoring water and ions), not the residue number stored in the PDB file. It does **not** perform sequence alignment.
 
-If residue numbering differs between the target and predictions, RMSD values may be incorrect or motifs may be skipped because matching atoms cannot be found.
+Before the analysis, the program runs `unifier` (from rnapolis) on the target and all predictions. It keeps only standard residues (A, C, G, U), removes hydrogens, normalizes atom names and unifies residue identifiers, so that all files describe the same set of atoms. Predictions with a different number of residues or a different sequence than the target are skipped with a message (`[skipped]`) before `unifier` runs. A residue whose number of atoms differs between files is removed from **all** files, and `unifier` prints a message ("will unify this"). Non-standard (modified) residues are removed without any message.
 
-**Multi-chain targets and predictions are supported, and are never reduced automatically.** By default, the full target and the full prediction are always compared as-is - motifs (and, for `--dbn`, whole motif ranges) that don't fit within a given prediction's residue range are simply skipped individually rather than causing an error. If either the target or a prediction has more than one chain, the program prints which chains it found and reminds you that you can select just one.
+**Multi-chain targets and predictions are supported, and are never reduced automatically.** By default, the full target and the full prediction are always compared as-is. If either the target or a prediction has more than one chain, the program prints which chains it found and reminds you that you can select just one.
 
 To restrict the target to a single chain, use `--target-chain`. To restrict predictions to a single chain (applied uniformly to every prediction in the run), use `--prediction-chain`. Both accept the original chain letter from the file - or, if `--chain-mapping` was also used, the newly assigned chain letter from that remapping (chain selection is always applied after chain mapping, on its result).
 
@@ -128,6 +129,24 @@ The following arguments are always required:
 The target structure must contain 3D atomic coordinates because they are required for RMSD calculation.
 
 Dot-Bracket and BPSEQ files contain only secondary structure information. They are used exclusively to identify structural motifs and do **not** replace the target PDB structure.
+
+---
+
+## Unified files and the two-step workflow
+
+`unifier` runs automatically in every run. For `--fr3d` and `--annotator` nothing else is needed: motifs are computed on the unified target, so numbering is consistent.
+
+The other motif sources (`--dbn`, `--bpseq`, `--external-tool`, `--motif-tree`) take their pairing information from outside, and that information describes a specific PDB file. If it was computed on the **original** target, and `unifier` removes a residue (or changes identifiers), the numbering of the external file may no longer match the unified target, and the program does not check this. For these sources use two steps:
+
+1. Run with `--unify-files`. The program applies `--chain-mapping`, `--target-chain` and `--prediction-chain`, runs `unifier`, saves the unified files to the `unified/` folder and stops.
+2. Run the external tool on the unified **target** from that folder to get the DBN, BPSEQ or tool output.
+3. Run the program again, with the unified files as `--target` and `--prediction` (pass predictions one by one, or put them in a separate folder - the `unified/` folder also contains the target and intermediate files), together with `--dbn`, `--bpseq` or `--external-output`. Do **not** repeat `--chain-mapping`, `--target-chain` or `--prediction-chain` in this run, because the files are already final.
+
+```
+--unify-files
+```
+
+When no residue was removed in the first step, the second step gives the same files again (and no "will unify this" messages).
 
 ---
 
@@ -190,8 +209,7 @@ Previously generated motif lists can be reused.
 --motif-tree target.structure_tree.json
 ```
 
-No motif detection is performed. `--remove-isolated` has no effect here
-
+No motif detection is performed. `--remove-isolated` and `--decompose-pseudoknot-free` have no effect here.
 ---
 
 ## 4. Dot-Bracket file
@@ -308,7 +326,18 @@ Rules:
 ## Workflow
 
 ```
-                                 target.pdb
+                      target.pdb + prediction PDB(s)
+                                     │
+                     (chain mapping, chain selection)
+                                     │
+                                     ▼
+                  skip predictions incompatible with the target
+                                     │
+                                     ▼
+                   unifier  ──(--unify-files: stop here)
+                                     │
+                                     ▼
+                              unified target
                                      │
            ┌───────────┬─────────────┼──────────────┬──────────────┐
            │           │             │              │              │
@@ -316,15 +345,13 @@ Rules:
            │           │             │              │              │
            └───────────┴─────────────┴──────────────┴──────────────┘
                                      │
-                     (optional: remove isolated pairs)
+                (optional: remove isolated pairs,
+                 pseudoknot-aware decomposition)
                                      │
                                motif list
                                      │
                                      ▼
-                            prediction PDB(s)
-                                     │
-                            global TM-score
-                                (USalign)
+                           global TM-score (USalign)
                                      │
                          TM-score >= threshold ?
                           │
@@ -333,15 +360,13 @@ Rules:
                          yes
                           │
                           ▼
-                local motif superposition
-               (Bio.PDB.Superimposer)
+                local motif superposition (Kabsch)
                           │
                           ▼
-                 motif RMSD + motif TM-score
+                 motif RMSD, nRMSD + motif TM-score
                           │
                           ▼
-                 per_motif_rmsd.csv
-                 motif_summary.csv
+                 four CSV summary files
 ```
 
 ---
@@ -412,6 +437,7 @@ A specific binary can also be provided manually with `--usalign-bin`.
 | `--target-chain` | chain to reduce the target to, for multi-chain targets |
 | `--prediction-chain` | chain to reduce every prediction to, for multi-chain predictions |
 | `--chain-mapping` | manual, per-file chain layout definition |
+| `--unify-files` | run `unifier` on the target and predictions, save the unified files to the `unified/` folder and stop |
 | `--motif-tree` | previously generated motif list |
 | `--dbn` | Dot-Bracket secondary structure |
 | `--bpseq` | BPSEQ secondary structure |
@@ -520,7 +546,8 @@ Loop motifs are classified automatically according to the number and length of t
 - If no motif source is given, the program defaults to FR3D.
 - Dot-Bracket and BPSEQ files are used **only to identify structural motifs**.
 - RMSD is always calculated from 3D atomic coordinates stored in the target and prediction structures.
-- The program assumes consistent residue numbering between the target and all predictions.
+- Residues are matched by position. `unifier` unifies identifiers and atom sets, but the program does not check whether the sequences of target and prediction describe the same molecule beyond the residue-name comparison done before `unifier` (A, C, G, U only).
+- `unifier` writes the unified files to the `unified/` folder (in the working directory, or in the output folder when started through `StruS.py`). Delete the folder between runs to avoid stale files.
 - The program performs local superposition independently for every motif using the Kabsch algorithm implemented in BioPython.
 - All atom **types** are included in the RMSD calculation (all-atom RMSD, not restricted to backbone or any other subset) - but for any given motif, only the atoms present in **both** the target and the prediction are actually superposed.
 - Predictions whose global TM-score is below the selected threshold are excluded before motif-level analysis.
