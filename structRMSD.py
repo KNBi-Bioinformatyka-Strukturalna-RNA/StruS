@@ -504,6 +504,36 @@ def extract_single_chain(pdb_path: Path, chain_id: str) -> Path:
     io.save(str(out_path), _ChainSelector())
     return out_path
 
+def is_rna_residue(residue) -> bool:
+    names = {atom.get_id() for atom in residue}
+    has_c1 = "C1'" in names or "C1*" in names
+    has_o2 = "O2'" in names or "O2*" in names
+    return has_c1 and has_o2
+
+
+class _RNASelector(Select):
+    def accept_residue(self, residue):
+        return is_rna_residue(residue)
+
+
+def write_rna_only(pdb_path: Path) -> tuple[Path, int, int]:
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure(pdb_path.stem, str(pdb_path))
+    model = next(iter(structure))
+
+    n_rna = n_other = 0
+    for chain in model:
+        for residue in chain:
+            if is_rna_residue(residue):
+                n_rna += 1
+            else:
+                n_other += 1
+
+    out_path = pdb_path.with_suffix(".rna.pdb")
+    io = PDBIO()
+    io.set_structure(model)
+    io.save(str(out_path), _RNASelector())
+    return out_path, n_rna, n_other
 
 def resolve_target_pdb(
     target_pdb: Path,
@@ -582,7 +612,7 @@ def list_prediction_files(predictions_arg: Path) -> list[Path]:
     if predictions_arg.is_dir():
         return sorted(
             p for p in predictions_arg.glob("*.pdb")
-            if ".remapped." not in p.name and ".chain" not in p.name
+            if ".remapped." not in p.name and ".chain" not in p.name and ".rna." not in p.name
         )
     return [predictions_arg]
 
@@ -904,6 +934,23 @@ def main():
             args.target, chain_mapping["t"], args.target.with_suffix(".remapped.pdb")
         )
 
+    target_source, n_rna, n_other = write_rna_only(Path(target_source))
+    if n_rna == 0:
+        raise SystemExit(f"error: target {args.target} contains no RNA residues")
+    if n_other:
+        print(f"Target: kept {n_rna} RNA residues, ignored {n_other} non-RNA residues")
+
+    rna_prediction_paths = []
+    for path in prediction_paths:
+        rna_path, n_rna, n_other = write_rna_only(path)
+        if n_rna == 0:
+            print(f"[skipped] {path.name}: no RNA residues in prediction")
+            continue
+        if n_other:
+            print(f"{path.name}: kept {n_rna} RNA residues, ignored {n_other} non-RNA residues")
+        rna_prediction_paths.append(rna_path)
+    prediction_paths = rna_prediction_paths
+
     target_pdb = resolve_target_pdb(
         target_source,
         getattr(args, "target_chain", None),
@@ -955,6 +1002,23 @@ def struct_rmsd_main(workdir, kwargs):
         target_source = apply_chain_mapping(
             Path(args.target), chain_mapping["t"], Path(args.target).with_suffix(".remapped.pdb")
         )
+
+    target_source, n_rna, n_other = write_rna_only(Path(target_source))
+    if n_rna == 0:
+        raise SystemExit(f"error: target {args.target} contains no RNA residues")
+    if n_other:
+        print(f"Target: kept {n_rna} RNA residues, ignored {n_other} non-RNA residues")
+
+    rna_prediction_paths = []
+    for path in prediction_paths:
+        rna_path, n_rna, n_other = write_rna_only(path)
+        if n_rna == 0:
+            print(f"[skipped] {path.name}: no RNA residues in prediction")
+            continue
+        if n_other:
+            print(f"{path.name}: kept {n_rna} RNA residues, ignored {n_other} non-RNA residues")
+        rna_prediction_paths.append(rna_path)
+    prediction_paths = rna_prediction_paths
 
     target_pdb = resolve_target_pdb(
         target_source,
