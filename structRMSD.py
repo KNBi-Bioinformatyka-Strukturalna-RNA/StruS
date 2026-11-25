@@ -215,9 +215,17 @@ def restrict_to_target_chain(
 
 
 def parse_chain_segment(segment: str) -> tuple[str, int, int]:
-    match = re.fullmatch(r"([A-Za-z]+)(\d+)-(\d+)", segment)
+    segment = segment.strip()
+
+    match = re.fullmatch(r"([A-Za-z0-9]+)/(-?\d+)-(-?\d+)", segment)
     if not match:
-        raise ValueError(f"Cannot parse chain segment: {segment!r}")
+        match = re.fullmatch(r"([A-Za-z]+)(-?\d+)-(-?\d+)", segment)
+    if not match:
+        raise ValueError(
+            f"Cannot parse chain segment: {segment!r} "
+            f"(use e.g. 'A1-50' or '3/5-86' for chains with digits)"
+        )
+
     chain_id, first, last = match.groups()
     return chain_id, int(first), int(last)
 
