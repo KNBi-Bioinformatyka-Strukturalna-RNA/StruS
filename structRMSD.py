@@ -537,6 +537,10 @@ def write_rna_only(pdb_path: Path) -> tuple[Path, int, int]:
             else:
                 n_other += 1
 
+    coords = [atom.coord for res in model.get_residues() if is_rna_residue(res) for atom in res]
+    if coords and all((c == coords[0]).all() for c in coords):
+        raise ValueError("all RNA atoms have identical coordinates (empty/placeholder model)")
+
     out_path = pdb_path.with_suffix(".rna.pdb")
     io = PDBIO()
     io.set_structure(model)
@@ -950,7 +954,11 @@ def main():
 
     rna_prediction_paths = []
     for path in prediction_paths:
-        rna_path, n_rna, n_other = write_rna_only(path)
+        try:
+            rna_path, n_rna, n_other = write_rna_only(path)
+        except Exception as e:
+            print(f"[skipped] {path.name}: cannot read PDB file ({type(e).__name__}: {e})")
+            continue
         if n_rna == 0:
             print(f"[skipped] {path.name}: no RNA residues in prediction")
             continue
@@ -1013,13 +1021,17 @@ def struct_rmsd_main(workdir, kwargs):
 
     target_source, n_rna, n_other = write_rna_only(Path(target_source))
     if n_rna == 0:
-        raise SystemExit(f"error: target {args.target} contains no RNA residues")
+        raise ValueError(f"target {args.target} contains no RNA residues")
     if n_other:
         print(f"Target: kept {n_rna} RNA residues, ignored {n_other} non-RNA residues")
 
     rna_prediction_paths = []
     for path in prediction_paths:
-        rna_path, n_rna, n_other = write_rna_only(path)
+        try:
+            rna_path, n_rna, n_other = write_rna_only(path)
+        except Exception as e:
+            print(f"[skipped] {path.name}: cannot read PDB file ({type(e).__name__}: {e})")
+            continue
         if n_rna == 0:
             print(f"[skipped] {path.name}: no RNA residues in prediction")
             continue

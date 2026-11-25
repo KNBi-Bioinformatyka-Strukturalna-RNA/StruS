@@ -263,6 +263,10 @@ This works for `--annotator`, `--dbn`, `--bpseq` and `--fr3d` (all four are inte
 --chain-mapping "t:A21-40;A1-20;;prediction_1.pdb:A1-20;B1-20"
 ```
 
+```
+--chain-mapping "M1221TS262_1:2/1-398;3/5-86"
+```
+
 lets you define the chain layout explicitly, per file.
 
 Syntax:
@@ -271,7 +275,12 @@ Syntax:
 - Each block starts with a file identifier followed by `:` - `t` for the target, or the exact filename for a prediction.
 - Within a block, `;` separates logical chains, numbered in the order given (first one becomes the new chain A, second one chain B, and so on).
 - Within a single logical chain, `+` joins segments (even from different original chains) into one, in the given order.
-- Each segment is written as `<original_chain><first>-<last>` (e.g. `A21-40`).
+- Each segment is written as `<original_chain><first>-<last>` (e.g. `A21-40`),
+  or as `<original_chain>/<first>-<last>` (e.g. `3/5-86`). The `/` form is
+  required when the chain ID contains digits (e.g. chains `2`, `3`, `A1`),
+  because otherwise the chain ID and the residue number cannot be told apart.
+  Both forms can be mixed in one mapping, and negative residue numbers are
+  allowed (e.g. `A/-2-30`).
 
 Rules:
 
