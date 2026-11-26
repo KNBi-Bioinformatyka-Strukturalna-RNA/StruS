@@ -11,7 +11,7 @@ from Bio.PDB import PDBParser, PDBIO
 from Bio.PDB.Structure import Structure as PDBStructure
 from Bio.PDB.Model import Model as PDBModel
 from Bio.PDB.Chain import Chain as PDBChain
-from structRMSD import struct_rmsd_main
+from structRMSD import struct_rmsd_main, apply_chain_mapping, parse_chain_mapping, parse_chain_segment
 from config import (PYTHON_BIN, ANNOTATOR, CONVERTER, RTBS, MBR, FR3D, FR3D_TO_DBN, CONVERTER_FROM_DBN, ANNOTATOR_TO_DBN, MOLECULE_FILTER, RNAPOLIS_SRC)
 
 # --- Previous approach: convert raw .pdb input to mmCIF (via rnapolis
@@ -91,7 +91,7 @@ Usage:
     parser.add_argument("--min-coverage", type=float, default=0.9)
     parser.add_argument("--target-chain", type=str, default=None)
     parser.add_argument("--prediction-chain", type=str, default=None)
-    parser.add_argument("--chain-mapping", type=str, default=None, help="Remap/regroup chains in the target and prediction .pdb files before running any tool. Format: 'file_id:chainA1-10+chainB5-20;chainC1-30;;other_file_id:...' where each ';;'-separated block targets a file (matched by its .pdb stem), each ';'-separated entry within a block defines one new logical chain (assigned new IDs A, B, C, ...), and '+' concatenates residue ranges ('chainId<first>-<last>') from the original file into that logical chain. Files with no matching file_id are copied through unchanged. Not applicable with --dbn_rtbs.")
+    parser.add_argument("--chain-mapping", type=str, default=None, help="Remap/regroup chains in the target and prediction .pdb files before running any tool. Format: 'file_id:A1-10+B5-20;C1-30;;other_file_id:...' where each ';;'-separated block targets a file ('t' for the target, or the exact prediction file name, e.g. 'prediction_1.pdb'), each ';'-separated entry within a block defines one new logical chain (assigned new IDs A, B, C, ...), and '+' concatenates residue ranges from the original file into that logical chain. A range is written as '<chain><first>-<last>' (e.g. 'A21-40') or '<chain>/<first>-<last>' (e.g. '3/5-86'); the '/' form is required for chain IDs containing digits. Files with no matching file_id are copied through unchanged. Not applicable with --dbn_rtbs.")
     parser.add_argument("--usalign-bin", type=str, default=None)
     parser.add_argument("--out-per-motif", type=Path, default=Path("per_motif_rmsd.csv"))
     parser.add_argument("--out-summary", type=Path, default=Path("motif_summary.csv"))
@@ -143,62 +143,6 @@ def check_cif(path):
             "input for molecule-filter; run without that switch to use .pdb input instead."
         )
     return path
-
-
-def parse_chain_segment(segment: str) -> tuple[str, int, int]:
-    match = re.fullmatch(r"([A-Za-z]+)(\d+)-(\d+)", segment)
-    if not match:
-        raise ValueError(f"Cannot parse chain segment: {segment!r}")
-    chain_id, first, last = match.groups()
-    return chain_id, int(first), int(last)
-
-
-def parse_chain_mapping(spec: str) -> dict[str, list[list[tuple[str, int, int]]]]:
-    mapping = {}
-    for block in spec.split(";;"):
-        block = block.strip()
-        if not block:
-            continue
-        file_id, chains_part = block.split(":", 1)
-        logical_chains = []
-        for chain_spec in chains_part.split(";"):
-            segments = [parse_chain_segment(s) for s in chain_spec.split("+")]
-            logical_chains.append(segments)
-        mapping[file_id] = logical_chains
-    return mapping
-
-
-def apply_chain_mapping(
-    pdb_path: Path, logical_chains: list[list[tuple[str, int, int]]], out_path: Path
-) -> Path:
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure(pdb_path.stem, str(pdb_path))
-    old_model = next(iter(structure))
-
-    new_structure = PDBStructure(pdb_path.stem)
-    new_model = PDBModel(0)
-    new_structure.add(new_model)
-
-    new_chain_ids = string.ascii_uppercase
-
-    for i, segments in enumerate(logical_chains):
-        new_chain = PDBChain(new_chain_ids[i])
-        new_model.add(new_chain)
-        for old_chain_id, first, last in segments:
-            old_chain = old_model[old_chain_id]
-            for res_num in range(first, last + 1):
-                if res_num not in old_chain:
-                    continue
-                residue = old_chain[res_num]
-                if residue.id[0] != " ":
-                    continue
-                residue.detach_parent()
-                new_chain.add(residue)
-
-    io = PDBIO()
-    io.set_structure(new_structure)
-    io.save(str(out_path))
-    return out_path
 
 
 def remap_pdb_chains(pdb_file, chain_mapping, output_dir):
@@ -511,6 +455,7 @@ def main():
                 target, chain_mapping["t"], target_out_dir / target.name
             )
         args.target = str(target)
+        args.chain_mapping = None
 
         if pred_dir is None:
             predictions = [remap_pdb_chains(predictions[0], chain_mapping, chain_mapped_dir / "predictions")]
